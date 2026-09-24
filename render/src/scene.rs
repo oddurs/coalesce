@@ -194,7 +194,7 @@ pub fn shake(tau: f32) -> [f32; 3] {
 /// Exposure arc: a dark overture, a build through the dance, the flash, then
 /// the calm and the fall.
 pub fn exposure(tau: f32) -> f32 {
-    let build = 0.72 + 0.28 * smoothstep(6.0, 34.0, tau) + 0.3 * smoothstep(38.0, 47.5, tau);
+    let build = 0.72 + 0.28 * smoothstep(6.0, 34.0, tau) + 0.15 * smoothstep(38.0, 47.5, tau);
     let settle = 1.0 - 0.3 * smoothstep(48.5, 53.0, tau);
     let fall = 1.0 - 0.15 * smoothstep(55.0, 58.0, tau);
     build * settle * fall

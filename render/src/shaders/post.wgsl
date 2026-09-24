@@ -216,7 +216,7 @@ fn composite(p: vec2<u32>) {
     // Look: a little punch, saturation.
     let tl = luminance(t);
     t = mix(vec3<f32>(tl), t, U.k.y);
-    t = pow(t, vec3<f32>(1.12));
+    t = pow(t, vec3<f32>(1.16));
     var lin = agx_eotf(t);
 
     var out = srgb_encode(clamp(lin, vec3<f32>(0.0), vec3<f32>(1.0)));

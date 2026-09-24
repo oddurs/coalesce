@@ -216,7 +216,7 @@ fn disk_sample(
     let fine = fbm(q * 3.0 + vec3<f32>(seed, warp * 2.0, zn), 3);
     let n = n1 * 0.55 + rings * 0.3 + fine * 0.15;
     let n2 = fine;
-    var dens = pow(smoothstep(0.40, 0.72, n), 1.2);
+    var dens = pow(smoothstep(0.41, 0.72, n), 1.35);
     if (driven > 0.0) {
         // Two-armed trailing spiral locked to the binary, and the lopsided
         // overdensity that orbits the cavity edge. Both fade outward.
@@ -276,6 +276,20 @@ fn stream_density(x: vec3<f32>, hole: vec3<f32>, cavity: f32, seed: f32) -> f32 
     return exp(-(best * best) / (width * width)) * (0.6 + 0.4 * along) * taper;
 }
 
+// Soft corona above a disk: scattered light with a tall, smooth profile.
+// Gives the disks depth without the cost of more turbulence.
+fn corona(x: vec3<f32>, center: vec3<f32>, normal: vec3<f32>, inner: f32, outer: f32, gain: f32, temp: f32) -> vec3<f32> {
+    if (gain <= 0.0) { return vec3<f32>(0.0); }
+    let rel = x - center;
+    let z = abs(dot(rel, normal));
+    let r = length(rel - dot(rel, normal) * normal);
+    if (r < inner * 0.7 || r > outer * 1.3) { return vec3<f32>(0.0); }
+    let height = 0.07 * r + 0.03;
+    let vertical = exp(-z / height);
+    let radial = pow(inner / max(r, inner), 2.2) * smoothstep(inner * 0.7, inner * 1.1, r) * (1.0 - smoothstep(outer * 0.9, outer * 1.3, r));
+    return bb_color(temp * 0.9) * vertical * radial * gain * 0.008;
+}
+
 fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
     var total: DiskSample;
     total.emission = vec3<f32>(0.0);
@@ -290,6 +304,7 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
         );
         total.emission += s.emission;
         total.density += s.density;
+        total.emission += corona(x, b.pos_rs.xyz, b.normal.xyz, b.disk.x, b.disk.y, b.disk.z, b.disk.w);
         if (b.disk.z > 0.0 && P.gw2.w > 0.0) {
             let st = stream_density(x, b.pos_rs.xyz, P.big.x, f32(i) * 3.1) * P.gw2.w * b.disk.z;
             total.emission += bb_color(6200.0) * st * 0.15;
@@ -300,10 +315,11 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
     let ripple = P.gw2.y * wave.h * length(x.xz);
     let big = disk_sample(
         x, dir, vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0),
-        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.012, 2.5, ripple, 1.0,
+        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.009, 2.5, ripple, 1.0,
     );
     total.emission += big.emission;
     total.density += big.density;
+    total.emission += corona(x, vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), P.big.x, P.big.y, P.big.z, P.big.w);
     // Merger flash: a hot core in the first moments.
     let flash = P.gw2.z;
     let rc = length(x);
@@ -362,8 +378,11 @@ fn sky(d: vec3<f32>) -> vec3<f32> {
     let px_size = P.sky.z;
     var col = vec3<f32>(0.0);
     col += star_layer(d, 900.0, 0.012, 11u, px_size * 1.0) * 0.8;
-    col += star_layer(d, 2400.0, 0.012, 23u, px_size * 0.8) * 0.06;
+    col += star_layer(d, 2400.0, 0.016, 23u, px_size * 0.8) * 0.05;
     col += star_layer(d, 300.0, 0.006, 37u, px_size * 1.3) * 3.0;
+    // A handful of bright stars with a soft halo: these lens into arcs.
+    col += star_layer(d, 120.0, 0.004, 53u, px_size * 1.2) * 14.0;
+    col += star_layer(d, 120.0, 0.004, 53u, px_size * 5.0) * 0.6;
     col *= P.sky.x;
 
     // Nebula: faint warm dust and a cold gas band, well below the disks.
@@ -374,7 +393,7 @@ fn sky(d: vec3<f32>) -> vec3<f32> {
     let wisps = fbm(d * 9.0 + vec3<f32>(gas * 3.0, dust * 2.0, 1.0), 4);
     let warm = vec3<f32>(1.0, 0.5, 0.22) * pow(dust, 6.0) * 1.2 * (0.5 + wisps);
     let cold = vec3<f32>(0.2, 0.5, 1.0) * pow(gas, 7.0) * 0.6 * (0.4 + wisps);
-    col += ((warm + cold) * band + vec3<f32>(0.004, 0.006, 0.012) * pow(gas, 3.0)) * P.sky.y;
+    col += ((warm + cold) * band * 1.6 + vec3<f32>(0.004, 0.006, 0.012) * pow(gas, 3.0)) * P.sky.y;
     return col;
 }
 
@@ -398,7 +417,7 @@ fn step_limit(x: vec3<f32>) -> f32 {
         let b = P.bodies[i];
         h = min(h, disk_step_limit(x, b.pos_rs.xyz, b.normal.xyz, b.disk.x, b.disk.y, b.disk.z, 0.06, 1.0));
     }
-    h = min(h, disk_step_limit(x, vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), P.big.x, P.big.y, P.big.z, 0.012, 2.5));
+    h = min(h, disk_step_limit(x, vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), P.big.x, P.big.y, P.big.z, 0.009, 2.5));
     return h;
 }
 

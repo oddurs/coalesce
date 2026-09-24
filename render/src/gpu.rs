@@ -440,15 +440,15 @@ impl Default for Look {
     fn default() -> Self {
         Look {
             exposure: 1.8,
-            bloom: 0.55,
-            streak: 0.45,
-            halation: 0.2,
+            bloom: 0.5,
+            streak: 0.5,
+            halation: 0.22,
             aberration: 0.0015,
             vignette: 0.35,
             grain: 0.028,
             distortion: 0.04,
-            saturation: 1.12,
-            knee: 0.45,
+            saturation: 1.22,
+            knee: 0.6,
         }
     }
 }
@@ -731,7 +731,7 @@ pub fn preview_quality(spp: u32) -> Quality {
         max_steps: 700,
         sky: 1.0,
         aperture: 1.0,
-        wave_lens: 0.004,
+        wave_lens: 0.007,
         wave_ripple: 0.6,
     }
 }

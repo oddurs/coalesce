@@ -47,7 +47,7 @@ impl QualityArgs {
                 max_steps: self.steps,
                 sky: 1.0,
                 aperture: 1.0,
-                wave_lens: 0.004,
+                wave_lens: 0.007,
                 wave_ripple: 0.6,
             }
         };
