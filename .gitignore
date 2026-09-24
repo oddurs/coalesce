@@ -1,0 +1,15 @@
+target/
+node_modules/
+.svelte-kit/
+web/build/
+.worktrees/
+out/
+*.exr
+*.mov
+*.mp4
+!web/static/poster.jpg
+.DS_Store
+.vscode/
+.idea/
+.env*
+!.env.example

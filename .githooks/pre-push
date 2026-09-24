@@ -1,0 +1,9 @@
+#!/bin/sh
+# Never push to the default branch; only push green code.
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+default=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' || echo main)
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  [ "$remote_ref" = "refs/heads/$default" ] && { echo "pre-push: $default advances only through a merged PR" >&2; exit 1; }
+done
+scripts/task check

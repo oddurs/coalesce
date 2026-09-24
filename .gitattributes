@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.exr binary
+*.mp4 binary
+*.mov binary
+pnpm-lock.yaml linguist-generated

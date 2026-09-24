@@ -1,0 +1,11 @@
+#!/bin/sh
+# One-time contributor setup: hooks, toolchains, dependencies.
+set -eu
+cd "$(dirname "$0")/.."
+git config core.hooksPath .githooks
+command -v cargo >/dev/null || { echo "install Rust: https://rustup.rs" >&2; exit 1; }
+command -v pnpm >/dev/null || { echo "install pnpm: https://pnpm.io" >&2; exit 1; }
+command -v ffmpeg >/dev/null || echo "warning: ffmpeg missing; scripts/encode needs it" >&2
+(cd web && pnpm install --frozen-lockfile)
+cargo fetch
+echo "ready: scripts/task check"

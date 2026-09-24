@@ -1,0 +1,29 @@
+#!/bin/sh
+# The one seam between automation and the toolchain. CI, hooks and scripts/agent
+# only ever call these verbs, so they cannot drift from each other.
+set -eu
+cd "$(dirname "$0")/.."
+
+web() { (cd web && pnpm --silent "$@"); }
+
+case "${1:-}" in
+  fmt)
+    cargo fmt --all
+    web exec prettier --write . ;;
+  fmt:check)
+    cargo fmt --all -- --check
+    web exec prettier --check . ;;
+  lint)
+    cargo clippy --all-targets --all-features -- -D warnings
+    web run check ;;
+  test)
+    cargo test --workspace ;;
+  build)
+    cargo build --release --workspace
+    web run build ;;
+  check)
+    "$0" fmt:check && "$0" lint && "$0" test && "$0" build ;;
+  *)
+    echo "usage: scripts/task {fmt|fmt:check|lint|test|build|check}" >&2
+    exit 2 ;;
+esac

@@ -1,0 +1,11 @@
+#!/bin/sh
+# Conventional Commits only, and nothing that names an AI tool.
+set -eu
+f=$1
+subject=$(head -1 "$f")
+echo "$subject" | grep -Eq '^(feat|fix|chore|docs|perf|refactor|test|style|build|ci|revert)(\([a-z0-9._/-]+\))?!?: [^ ].{0,71}$' \
+  || { echo "commit-msg: subject must be '<type>(<scope>)?: <summary>' (<= 72 chars, no trailing period)" >&2; exit 1; }
+case "$subject" in *.) echo "commit-msg: no trailing period" >&2; exit 1 ;; esac
+if grep -Eiq 'co-authored-by:.*(claude|anthropic|copilot|openai|gpt)|generated (with|by)|🤖|as an ai' "$f"; then
+  echo "commit-msg: attribution to an AI tool is not allowed" >&2; exit 1
+fi
