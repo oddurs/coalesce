@@ -19,11 +19,14 @@ pub const MERGER_LOSS: f32 = 0.05;
 pub const D0: f32 = 12.0;
 /// Coalescence time of the Peters inspiral, in loop seconds.
 pub const T_COALESCE: f32 = 48.0;
-/// The camera has fallen into the remnant's shadow here and the frame is
-/// black. The opening fades in from that black, so frame 1440 equals frame 0.
+/// The loop closes here, at the far point of the camera's excursion: the
+/// ending and opening cameras share pose, drift and sky, and the system is a
+/// speck. A short dissolve hides the speck changing from remnant to binary.
 pub const T_CUT: f32 = 58.5;
-/// Half-width of the fade, in seconds.
+/// Half-width of the dissolve, in seconds.
 pub const DISSOLVE: f32 = 1.0;
+/// Distance of the far point.
+pub const FAR: f32 = 2600.0;
 /// The last orbit plays in slow motion: loop time loses this much physical
 /// time across the window ending at coalescence.
 pub const SLOW_MOTION: f32 = 0.6;
@@ -254,20 +257,25 @@ pub fn gw_table() -> Vec<[f32; 4]> {
 /// Camera keyframes: (tau, distance, elevation deg, azimuth deg, fov deg, roll deg).
 /// Distances step down roughly geometrically so the approach eases in on its
 /// own; the plunge at the end is the one fast move.
-const CAMERA_KEYS: [[f32; 6]; 13] = [
-    [-6.0, 100.0, 8.0, -14.0, 32.0, 0.0],
-    [0.0, 94.0, 7.5, 0.0, 32.0, 0.0],
-    [8.0, 80.0, 7.0, 16.0, 33.0, 0.0],
-    [22.0, 58.0, 6.5, 44.0, 35.0, 0.0],
-    [34.0, 43.0, 6.5, 76.0, 37.0, 2.0],
-    [42.0, 34.0, 7.0, 102.0, 39.0, 5.0],
-    [46.5, 30.0, 9.0, 118.0, 41.0, 8.0],
-    [48.6, 28.0, 12.0, 125.0, 42.0, 9.0],
-    [52.0, 27.0, 20.0, 134.0, 40.0, 6.0],
-    [55.0, 22.0, 28.0, 144.0, 40.0, 2.0],
-    [57.5, 13.5, 33.0, 154.0, 40.0, -5.0],
-    [58.5, 5.5, 35.0, 160.0, 40.0, -10.0],
-    [61.0, 4.0, 35.0, 168.0, 40.0, -14.0],
+const CAMERA_KEYS: [[f32; 6]; 18] = [
+    [-6.0, FAR, 12.0, -21.5, 32.0, 0.0],
+    [-1.5, FAR, 12.0, -8.0, 32.0, 0.0],
+    [0.0, FAR, 12.0, -3.5, 32.0, 0.0],
+    [3.0, 1200.0, 11.5, 5.5, 32.0, 0.0],
+    [7.0, 220.0, 10.0, 12.0, 33.0, 0.0],
+    [12.0, 95.0, 8.5, 26.0, 34.0, 0.0],
+    [22.0, 58.0, 6.5, 60.0, 35.0, 0.0],
+    [34.0, 43.0, 6.5, 120.0, 37.0, 2.0],
+    [42.0, 34.0, 7.0, 180.0, 39.0, 5.0],
+    [46.5, 30.0, 9.0, 222.0, 41.0, 8.0],
+    [48.6, 28.0, 12.0, 244.0, 42.0, 9.0],
+    [52.0, 27.0, 16.0, 270.0, 40.0, 6.0],
+    [54.0, 55.0, 13.0, 300.0, 38.0, 3.0],
+    [56.0, 400.0, 12.0, 330.0, 34.0, 1.0],
+    [57.0, 2000.0, 12.0, 347.5, 32.0, 0.0],
+    [57.5, FAR, 12.0, 349.0, 32.0, 0.0],
+    [58.5, FAR, 12.0, 352.0, 32.0, 0.0],
+    [61.0, FAR, 12.0, 359.5, 32.0, 0.0],
 ];
 
 /// Cubic Hermite with finite-difference tangents in real time, so unevenly
@@ -322,7 +330,8 @@ fn camera_key(tau: f32) -> [f32; 5] {
 /// Organic drift, a few slow sines. Scaled with distance so it stays a
 /// fraction of a degree on screen, and grows a little as the dance tightens.
 pub fn sway(tau: f32, dist: f32) -> [f32; 3] {
-    let a = 0.012 * dist * (1.0 + 0.6 * smoothstep(30.0, 47.0, tau));
+    let gate = smoothstep(2.0, 6.0, tau) * (1.0 - smoothstep(52.0, 56.0, tau));
+    let a = 0.012 * dist * (1.0 + 0.6 * smoothstep(30.0, 47.0, tau)) * gate;
     [
         a * ((0.37 * tau + 1.0).sin() + 0.5 * (0.91 * tau).sin()),
         a * 0.6 * ((0.29 * tau).sin() + 0.5 * (0.73 * tau + 2.0).sin()),
@@ -496,18 +505,29 @@ mod tests {
     }
 
     #[test]
-    fn camera_is_inside_the_shadow_at_the_cut() {
-        // Shadow angular radius asin(b_crit / r) must exceed the half diagonal
-        // of a 40 degree lens: the frame is black on both sides of the cut.
-        for t in [T_CUT - 0.5 * DISSOLVE, T_CUT, T_CUT + DISSOLVE - 1e-3] {
-            let f = frame_at(t, t);
-            // After the merger both centres carry the remnant's mass.
-            let b = &f.bodies[0];
-            let r = dist(f.camera.pos, b.pos);
-            let b_crit = 2.598 * (f.bodies[0].rs + f.bodies[1].rs);
-            let shadow = (b_crit / r).min(1.0).asin().to_degrees();
-            assert!(shadow > 24.0, "t={t} shadow {shadow}");
+    fn camera_pose_matches_across_the_cut() {
+        // Same position, direction and drift on both sides of the seam, over
+        // the whole dissolve window, so only the speck differs.
+        let mut k = -DISSOLVE;
+        while k <= DISSOLVE {
+            let a = camera(T_CUT + k);
+            let b = camera(T_CUT + k - LOOP_SECONDS);
+            assert!(dist(a.pos, b.pos) < 0.05 * FAR / 100.0, "k={k} {a:?} {b:?}");
+            assert!((a.fov_x_deg - b.fov_x_deg).abs() < 1e-3);
+            assert!((a.roll_deg - b.roll_deg).abs() < 1e-3);
+            k += 0.125;
         }
+        // The drift is the same speed on both sides: no kick at the seam.
+        let step = 1.0 / FPS;
+        let v_end = dist(camera(T_CUT).pos, camera(T_CUT + step).pos);
+        let v_start = dist(
+            camera(T_CUT - LOOP_SECONDS).pos,
+            camera(T_CUT - LOOP_SECONDS + step).pos,
+        );
+        assert!(
+            (v_end - v_start).abs() < 0.05 * v_end,
+            "seam speeds {v_end} vs {v_start}"
+        );
     }
 
     #[test]
@@ -588,7 +608,8 @@ mod tests {
             let across_cut = n == (T_CUT * FPS) as u32;
             let jolting = (T_COALESCE..T_COALESCE + 3.5).contains(&t);
             if !across_cut && !jolting {
-                assert!(step < 0.6, "frame {n} jumped {step}");
+                let limit = 0.6 + 0.15 * frame(t).camera.focus_distance;
+                assert!(step < limit, "frame {n} jumped {step}");
             }
             prev = cam;
         }

@@ -391,9 +391,9 @@ fn sky(d: vec3<f32>) -> vec3<f32> {
     let dust = fbm(d * 4.0 + vec3<f32>(w * 1.5, 0.0, 9.0), 5);
     let gas = fbm(d * 3.0 + vec3<f32>(0.0, w * 2.0, 4.0), 5);
     let wisps = fbm(d * 9.0 + vec3<f32>(gas * 3.0, dust * 2.0, 1.0), 4);
-    let warm = vec3<f32>(1.0, 0.5, 0.22) * pow(dust, 6.0) * 1.2 * (0.5 + wisps);
+    let warm = vec3<f32>(1.0, 0.42, 0.18) * pow(dust, 7.0) * 1.3 * (0.4 + wisps);
     let cold = vec3<f32>(0.2, 0.5, 1.0) * pow(gas, 7.0) * 0.6 * (0.4 + wisps);
-    col += ((warm + cold) * band * 1.6 + vec3<f32>(0.004, 0.006, 0.012) * pow(gas, 3.0)) * P.sky.y;
+    col += ((warm + cold) * band * 0.9 + vec3<f32>(0.003, 0.005, 0.010) * pow(gas, 3.0)) * P.sky.y;
     return col;
 }
 
@@ -443,7 +443,9 @@ fn trace(origin: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
         }
 
         // Step control: fine near the horizons and inside the disk slab.
-        var h = clamp(0.09 * rmin, 0.03, 0.6);
+        // Coarse far out, where the field is weak and the camera may sit.
+        let far = 0.6 + 0.04 * max(rc - 60.0, 0.0);
+        var h = clamp(0.09 * rmin, 0.03, far);
         h = min(h, step_limit(x));
         h /= length(v);
 
