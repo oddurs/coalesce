@@ -20,18 +20,22 @@ struct Params {
     cam_v: vec4<f32>,       // xyz up, w tan(half fov y)
     cam_w: vec4<f32>,       // xyz forward, w aperture radius
     res: vec4<u32>,         // width, height, tile x, tile y
-    misc: vec4<f32>,        // time, sample index, max steps, unused
+    misc: vec4<f32>,        // time, sample index, max steps, seam cloud weight
     big: vec4<f32>,         // circumbinary inner, outer, gain, temperature
     sky: vec4<f32>,         // star gain, nebula gain, star size, unused
+    gw: vec4<f32>,          // wave speed, table t0, table dt, table length
+    gw2: vec4<f32>,         // lens strength, disk ripple strength, flash, stream gain
+    ejecta: vec4<f32>,      // shell radius, brightness, width, age
     bodies: array<Body, 2>,
 };
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read_write> accum: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read> blackbody: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read> gw_table: array<vec4<f32>>;
 
 const PI: f32 = 3.14159265;
-const ESCAPE_RADIUS: f32 = 90.0;
+const ESCAPE_RADIUS: f32 = 150.0;
 const ABSORB: f32 = 0.9;
 
 // ---------------------------------------------------------------- random
@@ -106,6 +110,43 @@ fn bb_color(temp: f32) -> vec3<f32> {
     return mix(a, b, f);
 }
 
+// ---------------------------------------------------------------- waves
+
+// Strain table at emission time: amplitude, phase, and their time derivatives.
+fn gw_lookup(t: f32) -> vec4<f32> {
+    let f = clamp((t - P.gw.y) / P.gw.z, 0.0, P.gw.w - 1.001);
+    let i = u32(f);
+    let w = f - f32(i);
+    return mix(gw_table[i], gw_table[i + 1u], w);
+}
+
+struct Strain {
+    h: f32,
+    grad: vec3<f32>,
+};
+
+// Quadrupole wave radiated from the centre of mass, evaluated at retarded
+// time so ripples sweep outward at the wave speed. Analytic gradient.
+fn gw_strain(x: vec3<f32>) -> Strain {
+    var out: Strain;
+    let r = max(length(x), 3.0);
+    let rho = max(length(x.xz), 0.5);
+    let t_ret = P.misc.x - r / P.gw.x;
+    let s = gw_lookup(t_ret);
+    let phi = atan2(x.z, x.x);
+    let arg = 2.0 * phi - s.y;
+    let c = cos(arg);
+    let sn = sin(arg);
+    out.h = s.x * c / r;
+    // d/dr through the retarded time and the 1/r falloff.
+    let dh_dr = (-(s.z * c + s.x * sn * s.w) / P.gw.x) / r - out.h / r;
+    let dh_dphi = -2.0 * s.x * sn / r;
+    let rhat = x / r;
+    let phihat = vec3<f32>(-x.z, 0.0, x.x) / rho;
+    out.grad = dh_dr * rhat + (dh_dphi / rho) * phihat;
+    return out;
+}
+
 // ---------------------------------------------------------------- gravity
 
 fn accel(x: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
@@ -142,14 +183,14 @@ fn doppler(gas_vel: vec3<f32>, ray_dir: vec3<f32>) -> f32 {
 fn disk_sample(
     x: vec3<f32>, ray_dir: vec3<f32>, center: vec3<f32>, center_vel: vec3<f32>,
     normal: vec3<f32>, tangent: vec3<f32>, mass: f32, rs_grav: f32,
-    inner: f32, outer: f32, gain: f32, temp_in: f32, seed: f32, thick: f32, scale: f32,
+    inner: f32, outer: f32, gain: f32, temp_in: f32, seed: f32, thick: f32, scale: f32, ripple: f32,
 ) -> DiskSample {
     var out: DiskSample;
     out.emission = vec3<f32>(0.0);
     out.density = 0.0;
     if (gain <= 0.0) { return out; }
     let rel = x - center;
-    let z = dot(rel, normal);
+    let z = dot(rel, normal) - ripple;
     let inplane = rel - z * normal;
     let r = length(inplane);
     if (r < inner * 0.85 || r > outer * 1.15) { return out; }
@@ -195,27 +236,113 @@ fn disk_sample(
     return out;
 }
 
+// Accretion stream: gas torn from the cavity edge spirals in to the hole,
+// trailing behind it. Distance to a short polyline, Gaussian falloff.
+fn stream_density(x: vec3<f32>, hole: vec3<f32>, cavity: f32, seed: f32) -> f32 {
+    if (abs(x.y) > 2.5) { return 0.0; }
+    let rho_h = length(hole.xz);
+    let rho_x = length(x.xz);
+    if (rho_x < rho_h * 0.8 || rho_x > cavity * 1.05) { return 0.0; }
+    let phi_h = atan2(hole.z, hole.x);
+    let lag = 1.4;
+    var best = 1e9;
+    var best_s = 0.0;
+    var prev = hole;
+    for (var i = 1; i <= 12; i++) {
+        let sg = f32(i) / 12.0;
+        let ang = phi_h - lag * sg * sg;
+        let rad = rho_h + (cavity * 0.98 - rho_h) * sg;
+        let pnt = vec3<f32>(cos(ang) * rad, 0.0, sin(ang) * rad);
+        // Distance to the segment, so the stream is a continuous ribbon.
+        let seg = pnt - prev;
+        let u = clamp(dot(x - prev, seg) / max(dot(seg, seg), 1e-4), 0.0, 1.0);
+        let d = length(x - (prev + seg * u));
+        if (d < best) { best = d; best_s = (f32(i - 1) + u) / 12.0; }
+        prev = pnt;
+    }
+    let width = 0.15 + 0.35 * best_s;
+    let along = fbm(x * 1.6 + vec3<f32>(seed, P.misc.x * 0.5, 0.0), 3);
+    let taper = smoothstep(0.0, 0.08, best_s) * (1.0 - smoothstep(0.85, 1.0, best_s));
+    return exp(-(best * best) / (width * width)) * (0.6 + 0.4 * along) * taper;
+}
+
 fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
     var total: DiskSample;
     total.emission = vec3<f32>(0.0);
     total.density = 0.0;
+    let wave = gw_strain(x);
     for (var i = 0; i < 2; i++) {
         let b = P.bodies[i];
         let s = disk_sample(
             x, dir, b.pos_rs.xyz, b.vel_mass.xyz, b.normal.xyz, b.tangent.xyz,
             b.vel_mass.w, b.pos_rs.w, b.disk.x, b.disk.y, b.disk.z, b.disk.w,
-            f32(i) * 7.3, 0.06, 1.0,
+            f32(i) * 7.3, 0.06, 1.0, 0.0,
         );
         total.emission += s.emission;
         total.density += s.density;
+        if (b.disk.z > 0.0 && P.gw2.w > 0.0) {
+            let st = stream_density(x, b.pos_rs.xyz, P.big.x, f32(i) * 3.1) * P.gw2.w * b.disk.z;
+            total.emission += bb_color(6200.0) * st * 0.15;
+            total.density += st * 0.15;
+        }
     }
-    // Circumbinary disk around the centre of mass.
+    // Circumbinary disk around the centre of mass, rippled by the waves.
+    let ripple = P.gw2.y * wave.h * length(x.xz);
     let big = disk_sample(
         x, dir, vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0),
-        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.012, 2.5,
+        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.012, 2.5, ripple,
     );
     total.emission += big.emission;
     total.density += big.density;
+    // Merger flash: a hot core in the first moments.
+    let flash = P.gw2.z;
+    let rc = length(x);
+    if (flash > 0.0) {
+        total.emission += bb_color(7500.0) * exp(-rc / 3.5) * 0.4 * flash;
+    }
+    // Ejecta: the blast shell. Thin bright front, sparse tail behind it, both
+    // fading as the gas dilutes. Texture co-moves with the front.
+    let ej = P.ejecta;
+    if (ej.y > 0.0 && ej.x > 0.5) {
+        let d = rc - ej.x;
+        let w_in = 0.12 * ej.x + 1.0;
+        var profile = 0.0;
+        if (d > 0.0) { profile = exp(-(d * d) / (ej.z * ej.z)); }
+        else { profile = 0.06 * exp(d / w_in); }
+        if (profile > 0.002) {
+            let dirn = x / max(rc, 0.5);
+            let q = (x - dirn * ej.x) * 0.12 + vec3<f32>(0.0, ej.w * 0.05, 0.0);
+            let n1 = fbm(q, 4);
+            let n2 = fbm(q * 3.7 + vec3<f32>(n1 * 2.0), 3);
+            let clumps = pow(smoothstep(0.42, 0.78, n1 * 0.65 + n2 * 0.35), 2.0);
+            let strength = min(ej.y / 0.12, 1.0);
+            let dens = profile * clumps * strength * (0.15 + 0.85 * smoothstep(0.0, 1.0, ej.x / 12.0));
+            let temp = mix(6500.0, 4200.0, smoothstep(0.0, 40.0, ej.x));
+            let dilute = pow(10.0 / max(ej.x, 10.0), 0.8);
+            total.emission += bb_color(temp) * dens * ej.y * dilute * 1.8;
+            total.density += dens * 0.25;
+        }
+    }
+    // Seam cloud: the moment the front passes through the camera. Textured in
+    // camera space so both sides of the dissolve see the same gas.
+    let seam = P.misc.w;
+    if (seam > 0.0) {
+        let rel = x - P.cam_pos.xyz;
+        let dc = length(rel);
+        let envelope = exp(-(dc * dc) / 100.0);
+        if (envelope > 0.01) {
+            // Big billows with bright cores and dark lanes between them.
+            let q = rel * 0.09;
+            let n1 = fbm(q, 4);
+            let n2 = fbm(q * 3.3 + vec3<f32>(n1 * 1.8), 4);
+            let n3 = fbm(q * 9.0 + vec3<f32>(n2 * 1.5), 3);
+            let billow = smoothstep(0.3, 0.72, n1 * 0.6 + n2 * 0.28 + n3 * 0.12);
+            let dens = seam * envelope * billow * 2.5;
+            let core = pow(billow, 3.0);
+            total.emission += (bb_color(4300.0) * 0.12 + bb_color(6500.0) * core * 0.5) * dens;
+            total.density += dens;
+        }
+    }
     return total;
 }
 
@@ -305,6 +432,11 @@ fn step_limit(x: vec3<f32>) -> f32 {
         h = min(h, disk_step_limit(x, b.pos_rs.xyz, b.normal.xyz, b.disk.x, b.disk.y, b.disk.z, 0.06, 1.0));
     }
     h = min(h, disk_step_limit(x, vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), P.big.x, P.big.y, P.big.z, 0.012, 2.5));
+    if (P.ejecta.y > 0.0) {
+        let d = length(x) - P.ejecta.x;
+        if (d > -0.5 * P.ejecta.x - 4.0 && d < 3.0 * P.ejecta.z) { h = min(h, 0.35); }
+    }
+    if (P.misc.w > 0.0 && length(x - P.cam_pos.xyz) < 16.0) { h = min(h, 0.2); }
     return h;
 }
 
@@ -334,14 +466,17 @@ fn trace(origin: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
         h = min(h, step_limit(x));
         h /= length(v);
 
+        // Wave lensing: a weak refractive gradient, held across the step.
+        let a_gw = P.gw2.x * gw_strain(x).grad;
+
         // RK4 for the second order system x'' = accel(x, x').
-        let k1v = accel(x, v);
+        let k1v = accel(x, v) + a_gw;
         let k1x = v;
-        let k2v = accel(x + 0.5 * h * k1x, v + 0.5 * h * k1v);
+        let k2v = accel(x + 0.5 * h * k1x, v + 0.5 * h * k1v) + a_gw;
         let k2x = v + 0.5 * h * k1v;
-        let k3v = accel(x + 0.5 * h * k2x, v + 0.5 * h * k2v);
+        let k3v = accel(x + 0.5 * h * k2x, v + 0.5 * h * k2v) + a_gw;
         let k3x = v + 0.5 * h * k2v;
-        let k4v = accel(x + h * k3x, v + h * k3v);
+        let k4v = accel(x + h * k3x, v + h * k3v) + a_gw;
         let k4x = v + h * k3v;
         let dx = (h / 6.0) * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
         let dv = (h / 6.0) * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);

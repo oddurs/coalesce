@@ -17,7 +17,7 @@ struct Pass {
     pad0: u32,
     pad1: u32,
     f: vec4<f32>,       // blur: dir.xy, radius, sigma | downsample: knee
-    g: vec4<f32>,       // composite: exposure, wash, bloom, streak
+    g: vec4<f32>,       // composite: exposure, unused, bloom, streak
     h: vec4<f32>,       // composite: halation, aberration, vignette, grain
     k: vec4<f32>,       // composite: distortion, saturation, unused, unused
     levels: array<vec4<u32>, 6>, // w, h, offset, 0 for each pyramid level
@@ -198,9 +198,9 @@ fn composite(p: vec2<u32>) {
 
     var c = base + bloom * U.g.z + hal * U.h.x + st * U.g.w;
 
-    // Wash: exposure climbs, then the picture melts into warm white.
-    let wash = U.g.y;
-    c *= U.g.x * exp2(5.5 * wash);
+    // Flash: the merger kicks the exposure for a few frames.
+    let flash = U.k.z;
+    c *= U.g.x * (1.0 + 1.2 * flash);
 
     // Vignette, tighter across the short axis like a real anamorphic.
     let vig = 1.0 - U.h.z * smoothstep(0.15, 1.1, dot(centred * vec2<f32>(0.8, 1.15), centred * vec2<f32>(0.8, 1.15)));
@@ -218,7 +218,6 @@ fn composite(p: vec2<u32>) {
     t = mix(vec3<f32>(tl), t, U.k.y);
     t = pow(t, vec3<f32>(1.12));
     var lin = agx_eotf(t);
-    lin = mix(lin, vec3<f32>(1.0, 0.94, 0.86), smoothstep(0.55, 1.0, wash));
 
     var out = srgb_encode(clamp(lin, vec3<f32>(0.0), vec3<f32>(1.0)));
     let g = grain(p, U.frame) * U.h.w * (0.25 + 0.75 * (1.0 - luminance(out)));

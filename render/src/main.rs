@@ -47,6 +47,8 @@ impl QualityArgs {
                 max_steps: self.steps,
                 sky: 1.0,
                 aperture: 1.0,
+                wave_lens: 0.004,
+                wave_ripple: 0.6,
             }
         };
         if self.no_sky {
@@ -163,15 +165,49 @@ impl Session {
         Ok(Session { gpu, tracer, post })
     }
 
+    /// Trace loop time `t`. Inside the seam window both sides of the cut are
+    /// traced and mixed in linear light, hidden by the ejecta engulfing the camera.
     fn trace(&mut self, t: f32, q: &Quality) -> Result<Hdr, String> {
-        let frame = scene::frame(t);
-        let accum = self.tracer.render(&self.gpu, &frame, q)?;
-        Ok(Hdr::from_rgba(q.width, q.height, &accum))
+        let k = scene::dissolve(t);
+        if k <= 0.0 || k >= 1.0 {
+            let frame = scene::frame(t);
+            let accum = self.tracer.render(&self.gpu, &frame, q)?;
+            return Ok(Hdr::from_rgba(q.width, q.height, &accum));
+        }
+        let t = t.rem_euclid(scene::LOOP_SECONDS);
+        let before = scene::frame_at(t, t);
+        let after = scene::frame_at(t, t - scene::LOOP_SECONDS);
+        let a = Hdr::from_rgba(
+            q.width,
+            q.height,
+            &self.tracer.render(&self.gpu, &before, q)?,
+        );
+        let b = Hdr::from_rgba(
+            q.width,
+            q.height,
+            &self.tracer.render(&self.gpu, &after, q)?,
+        );
+        let rgb = a
+            .rgb
+            .iter()
+            .zip(&b.rgb)
+            .map(|(x, y)| x * (1.0 - k) + y * k)
+            .collect();
+        Ok(Hdr {
+            width: q.width,
+            height: q.height,
+            rgb,
+        })
     }
 
     fn grade(&self, hdr: &Hdr, t: f32, index: u32, look: &Look) -> Result<Vec<f32>, String> {
-        self.post
-            .process(&self.gpu, hdr, look, scene::wash(t), index)
+        self.post.process(
+            &self.gpu,
+            hdr,
+            look,
+            scene::flash(scene::physical_time(t)),
+            index,
+        )
     }
 }
 

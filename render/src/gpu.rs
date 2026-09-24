@@ -9,7 +9,7 @@ use wgpu::util::DeviceExt;
 
 use crate::blackbody;
 use crate::image::Hdr;
-use crate::scene::Frame;
+use crate::scene::{self, Frame};
 
 pub struct Gpu {
     pub device: wgpu::Device,
@@ -130,6 +130,9 @@ struct TraceParams {
     misc: [f32; 4],
     big: [f32; 4],
     sky: [f32; 4],
+    gw: [f32; 4],
+    gw2: [f32; 4],
+    ejecta: [f32; 4],
     bodies: [GpuBody; 2],
 }
 
@@ -146,6 +149,9 @@ pub struct Quality {
     pub sky: f32,
     /// Multiplier on the camera aperture.
     pub aperture: f32,
+    /// Gravitational-wave lensing and disk ripple strengths.
+    pub wave_lens: f32,
+    pub wave_ripple: f32,
 }
 
 fn normalize(v: [f32; 3]) -> [f32; 3] {
@@ -177,6 +183,9 @@ fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
     let tan_x = (cam.fov_x_deg.to_radians() * 0.5).tan();
     let tan_y = tan_x * q.height as f32 / q.width as f32;
     let px_rad = 2.0 * tan_x / q.width as f32;
+    // 1 at the cut, 0 outside the dissolve window: drives the seam cloud.
+    let k = scene::dissolve(frame.t);
+    let seam = 1.0 - (2.0 * k - 1.0).abs();
     let bodies = frame.bodies.map(|b| {
         let n = normalize(b.disk_normal);
         let seed = [n[2], n[0], -n[1]];
@@ -195,7 +204,7 @@ fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
         cam_v: v4(up, tan_y),
         cam_w: v4(fwd, cam.aperture * q.aperture),
         res: [q.width, q.height, 0, 0],
-        misc: [frame.tau, 0.0, q.max_steps as f32, 0.0],
+        misc: [frame.tau, 0.0, q.max_steps as f32, seam],
         big: [
             frame.circumbinary_inner,
             frame.circumbinary_outer,
@@ -203,6 +212,24 @@ fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
             3900.0,
         ],
         sky: [q.sky, q.sky, px_rad * 1.1, 0.0],
+        gw: [
+            scene::GW_SPEED,
+            scene::GW_T0,
+            scene::GW_DT,
+            scene::GW_LEN as f32,
+        ],
+        gw2: [
+            q.wave_lens,
+            q.wave_ripple,
+            frame.flash,
+            if frame.merged { 0.0 } else { 1.0 },
+        ],
+        ejecta: [
+            frame.ejecta.radius,
+            frame.ejecta.brightness,
+            frame.ejecta.width,
+            frame.ejecta.age,
+        ],
         bodies,
     }
 }
@@ -211,6 +238,7 @@ pub struct Tracer {
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
     lut: wgpu::Buffer,
+    gw: wgpu::Buffer,
     params: wgpu::Buffer,
     params_capacity: u64,
 }
@@ -236,6 +264,11 @@ impl Tracer {
                     ),
                     layout_entry(
                         2,
+                        wgpu::BufferBindingType::Storage { read_only: true },
+                        false,
+                    ),
+                    layout_entry(
+                        3,
                         wgpu::BufferBindingType::Storage { read_only: true },
                         false,
                     ),
@@ -265,6 +298,13 @@ impl Tracer {
                 contents: bytemuck::cast_slice(&blackbody::lut()),
                 usage: wgpu::BufferUsages::STORAGE,
             });
+        let gw = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("gw table"),
+                contents: bytemuck::cast_slice(&scene::gw_table()),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
         let params_capacity = 64;
         let params = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("trace params"),
@@ -276,6 +316,7 @@ impl Tracer {
             pipeline,
             layout,
             lut,
+            gw,
             params,
             params_capacity,
         }
@@ -317,6 +358,10 @@ impl Tracer {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: self.lut.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.gw.as_entire_binding(),
                 },
             ],
         });
@@ -483,7 +528,7 @@ impl Post {
         gpu: &Gpu,
         hdr: &Hdr,
         look: &Look,
-        wash: f32,
+        flash: f32,
         frame_index: u32,
     ) -> Result<Vec<f32>, String> {
         let (width, height) = (hdr.width, hdr.height);
@@ -648,9 +693,9 @@ impl Post {
             src_buf: 0,
             dst_buf: 4,
             mode: 2,
-            g: [look.exposure, wash, look.bloom, look.streak],
+            g: [look.exposure, 0.0, look.bloom, look.streak],
             h: [look.halation, look.aberration, look.vignette, look.grain],
-            k: [look.distortion, look.saturation, 0.0, 0.0],
+            k: [look.distortion, look.saturation, flash, 0.0],
             levels: level_table,
             ..blank
         });
@@ -685,5 +730,7 @@ pub fn preview_quality(spp: u32) -> Quality {
         max_steps: 700,
         sky: 1.0,
         aperture: 1.0,
+        wave_lens: 0.004,
+        wave_ripple: 0.6,
     }
 }
