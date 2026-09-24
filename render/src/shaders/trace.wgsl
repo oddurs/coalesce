@@ -20,7 +20,7 @@ struct Params {
     cam_v: vec4<f32>,       // xyz up, w tan(half fov y)
     cam_w: vec4<f32>,       // xyz forward, w aperture radius
     res: vec4<u32>,         // width, height, tile x, tile y
-    misc: vec4<f32>,        // time, sample index, max steps, seam cloud weight
+    misc: vec4<f32>,        // time, sample index, max steps, unused
     big: vec4<f32>,         // circumbinary inner, outer, gain, temperature
     sky: vec4<f32>,         // star gain, nebula gain, star size, unused
     gw: vec4<f32>,          // wave speed, table t0, table dt, table length
@@ -319,28 +319,8 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
             let dens = profile * clumps * strength * (0.15 + 0.85 * smoothstep(0.0, 1.0, ej.x / 12.0));
             let temp = mix(6500.0, 4200.0, smoothstep(0.0, 40.0, ej.x));
             let dilute = pow(10.0 / max(ej.x, 10.0), 0.8);
-            total.emission += bb_color(temp) * dens * ej.y * dilute * 1.8;
+            total.emission += bb_color(temp) * dens * ej.y * dilute * 1.0;
             total.density += dens * 0.25;
-        }
-    }
-    // Seam cloud: the moment the front passes through the camera. Textured in
-    // camera space so both sides of the dissolve see the same gas.
-    let seam = P.misc.w;
-    if (seam > 0.0) {
-        let rel = x - P.cam_pos.xyz;
-        let dc = length(rel);
-        let envelope = exp(-(dc * dc) / 100.0);
-        if (envelope > 0.01) {
-            // Big billows with bright cores and dark lanes between them.
-            let q = rel * 0.09;
-            let n1 = fbm(q, 4);
-            let n2 = fbm(q * 3.3 + vec3<f32>(n1 * 1.8), 4);
-            let n3 = fbm(q * 9.0 + vec3<f32>(n2 * 1.5), 3);
-            let billow = smoothstep(0.3, 0.72, n1 * 0.6 + n2 * 0.28 + n3 * 0.12);
-            let dens = seam * envelope * billow * 2.5;
-            let core = pow(billow, 3.0);
-            total.emission += (bb_color(4300.0) * 0.12 + bb_color(6500.0) * core * 0.5) * dens;
-            total.density += dens;
         }
     }
     return total;
@@ -436,7 +416,6 @@ fn step_limit(x: vec3<f32>) -> f32 {
         let d = length(x) - P.ejecta.x;
         if (d > -0.5 * P.ejecta.x - 4.0 && d < 3.0 * P.ejecta.z) { h = min(h, 0.35); }
     }
-    if (P.misc.w > 0.0 && length(x - P.cam_pos.xyz) < 16.0) { h = min(h, 0.2); }
     return h;
 }
 

@@ -19,13 +19,12 @@ pub const MERGER_LOSS: f32 = 0.05;
 pub const D0: f32 = 12.0;
 /// Coalescence time of the Peters inspiral, in loop seconds.
 pub const T_COALESCE: f32 = 48.0;
-/// The blast shell from the merger engulfs the camera here. Inside the gas
-/// the picture dissolves to the opening, so frame 1440 equals frame 0.
+/// The camera has fallen into the remnant's shadow here and the frame is
+/// black. The opening fades in from that black, so frame 1440 equals frame 0.
 pub const T_CUT: f32 = 58.5;
-/// Half-width of the dissolve, in seconds.
-pub const DISSOLVE: f32 = 0.75;
-/// Ejecta shell speed, scene units per loop second. Set so the shell reaches
-/// the camera exactly at the cut.
+/// Half-width of the fade, in seconds.
+pub const DISSOLVE: f32 = 1.0;
+/// Ejecta shell speed, scene units per loop second.
 pub const EJECTA_SPEED: f32 = 3.8;
 
 pub const RINGDOWN_AMPLITUDE: f32 = 3.0;
@@ -85,8 +84,7 @@ pub struct Frame {
     pub merged: bool,
 }
 
-/// The shell of gas blown out by the merger. Before the opening it is the
-/// previous cycle's shell, placed so that it is passing the camera at the cut.
+/// The shell of gas blown out by the merger.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Ejecta {
     pub radius: f32,
@@ -187,28 +185,15 @@ pub fn shake(tau: f32) -> [f32; 3] {
 
 /// Ejecta shell state at physical time `tau`.
 pub fn ejecta(tau: f32) -> Ejecta {
-    let ghost_start = T_CUT - LOOP_SECONDS;
-    if tau >= T_COALESCE {
-        let s = tau - T_COALESCE;
-        Ejecta {
-            radius: EJECTA_SPEED * s,
-            brightness: 0.6 * (-s / 1.4).exp() + 0.12,
-            width: 1.5 + 0.1 * EJECTA_SPEED * s,
-            age: s,
-        }
-    } else if tau < 5.0 {
-        // The previous cycle's shell: same age as the live one at the cut,
-        // radius matched to the opening camera so the handover is invisible.
-        let s = (T_CUT - T_COALESCE) + (tau - ghost_start);
-        let radius = camera_distance(ghost_start) + EJECTA_SPEED * (tau - ghost_start);
-        Ejecta {
-            radius,
-            brightness: 0.12 * (-(tau - ghost_start) / 1.6).exp(),
-            width: 1.5 + 0.1 * radius,
-            age: s,
-        }
-    } else {
-        Ejecta::default()
+    if tau < T_COALESCE {
+        return Ejecta::default();
+    }
+    let s = tau - T_COALESCE;
+    Ejecta {
+        radius: EJECTA_SPEED * s,
+        brightness: 0.6 * (-s / 1.4).exp() + 0.12,
+        width: 1.5 + 0.1 * EJECTA_SPEED * s,
+        age: s,
     }
 }
 
@@ -259,7 +244,7 @@ pub fn gw_table() -> Vec<[f32; 4]> {
 }
 
 /// Catmull-Rom keyframes for the camera: (tau, distance, elevation deg, azimuth deg, fov deg).
-const CAMERA_KEYS: [[f32; 5]; 11] = [
+const CAMERA_KEYS: [[f32; 5]; 12] = [
     [-6.0, 96.0, 9.5, -18.0, 34.0],
     [0.0, 90.0, 9.0, 0.0, 34.0],
     [14.0, 62.0, 8.0, 30.0, 36.0],
@@ -267,19 +252,15 @@ const CAMERA_KEYS: [[f32; 5]; 11] = [
     [40.0, 36.0, 8.0, 92.0, 40.0],
     [46.0, 31.0, 12.0, 108.0, 42.0],
     [48.5, 29.0, 15.0, 114.0, 42.0],
-    [52.0, 32.0, 22.0, 124.0, 40.0],
-    [56.0, 38.0, 26.0, 134.0, 38.0],
-    [58.5, 40.0, 27.0, 140.0, 38.0],
-    [61.0, 41.0, 27.0, 145.0, 38.0],
+    [52.0, 26.0, 26.0, 126.0, 40.0],
+    [56.0, 17.0, 32.0, 144.0, 40.0],
+    [57.5, 13.5, 35.0, 154.0, 40.0],
+    [58.5, 5.5, 36.0, 160.0, 40.0],
+    [61.0, 4.0, 36.0, 168.0, 40.0],
 ];
 
-fn catmull_rom(p0: f32, p1: f32, p2: f32, p3: f32, s: f32) -> f32 {
-    0.5 * ((2.0 * p1)
-        + (-p0 + p2) * s
-        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * s * s
-        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * s * s * s)
-}
-
+/// Cubic Hermite with finite-difference tangents in real time, so unevenly
+/// spaced keys do not overshoot.
 fn camera_key(tau: f32) -> [f32; 4] {
     let n = CAMERA_KEYS.len();
     let tau = tau.clamp(CAMERA_KEYS[0][0], CAMERA_KEYS[n - 1][0]);
@@ -287,20 +268,44 @@ fn camera_key(tau: f32) -> [f32; 4] {
     while i + 2 < n && CAMERA_KEYS[i + 1][0] <= tau {
         i += 1;
     }
-    let k1 = CAMERA_KEYS[i];
-    let k2 = CAMERA_KEYS[i + 1];
-    let k0 = CAMERA_KEYS[i.saturating_sub(1)];
-    let k3 = CAMERA_KEYS[(i + 2).min(n - 1)];
-    let s = ((tau - k1[0]) / (k2[0] - k1[0])).clamp(0.0, 1.0);
+    let (k1, k2) = (CAMERA_KEYS[i], CAMERA_KEYS[i + 1]);
+    let dt = k2[0] - k1[0];
+    let s = ((tau - k1[0]) / dt).clamp(0.0, 1.0);
+    let slope = |a: [f32; 5], b: [f32; 5], j: usize| (b[j] - a[j]) / (b[0] - a[0]);
+    // Fritsch-Carlson limiting: flat where the slope changes sign, and never
+    // more than three times the gentler neighbour.
+    let tangent = |idx: usize, j: usize| {
+        let here = CAMERA_KEYS[idx];
+        match (
+            idx.checked_sub(1).map(|p| CAMERA_KEYS[p]),
+            CAMERA_KEYS.get(idx + 1),
+        ) {
+            (Some(prev), Some(next)) => {
+                let (a, b) = (slope(prev, here, j), slope(here, *next, j));
+                if a * b <= 0.0 {
+                    0.0
+                } else {
+                    let avg = 0.5 * (a + b);
+                    avg.signum() * avg.abs().min(3.0 * a.abs().min(b.abs()))
+                }
+            }
+            (None, Some(next)) => slope(here, *next, j),
+            (Some(prev), None) => slope(prev, here, j),
+            (None, None) => 0.0,
+        }
+    };
+    let (h00, h10, h01, h11) = (
+        2.0 * s * s * s - 3.0 * s * s + 1.0,
+        s * s * s - 2.0 * s * s + s,
+        -2.0 * s * s * s + 3.0 * s * s,
+        s * s * s - s * s,
+    );
     let mut out = [0.0; 4];
     for (j, o) in out.iter_mut().enumerate() {
-        *o = catmull_rom(k0[j + 1], k1[j + 1], k2[j + 1], k3[j + 1], s);
+        let (m1, m2) = (tangent(i, j + 1) * dt, tangent(i + 1, j + 1) * dt);
+        *o = h00 * k1[j + 1] + h10 * m1 + h01 * k2[j + 1] + h11 * m2;
     }
     out
-}
-
-pub fn camera_distance(tau: f32) -> f32 {
-    camera_key(tau)[0]
 }
 
 pub fn camera(tau: f32) -> Camera {
@@ -434,20 +439,27 @@ mod tests {
     }
 
     #[test]
-    fn ejecta_shell_is_at_the_camera_on_both_sides_of_the_cut() {
-        let live = ejecta(T_CUT);
-        let ghost = ejecta(T_CUT - LOOP_SECONDS);
-        assert!(
-            (live.radius - camera(T_CUT).focus_distance).abs() < 1.0,
-            "{live:?}"
-        );
-        assert!(
-            (ghost.radius - camera(T_CUT - LOOP_SECONDS).focus_distance).abs() < 1e-3,
-            "{ghost:?}"
-        );
-        assert!((live.brightness - ghost.brightness).abs() < 0.05);
+    fn ejecta_exists_only_after_the_merger() {
         assert_eq!(ejecta(20.0), Ejecta::default());
-        assert!(ejecta(3.0).brightness < 0.1);
+        assert_eq!(ejecta(-1.0), Ejecta::default());
+        let e = ejecta(T_COALESCE + 5.0);
+        assert!((e.radius - 5.0 * EJECTA_SPEED).abs() < 1e-4);
+        assert!(e.brightness > 0.12);
+    }
+
+    #[test]
+    fn camera_is_inside_the_shadow_at_the_cut() {
+        // Shadow angular radius asin(b_crit / r) must exceed the half diagonal
+        // of a 40 degree lens: the frame is black on both sides of the cut.
+        for t in [T_CUT - 0.5 * DISSOLVE, T_CUT, T_CUT + DISSOLVE - 1e-3] {
+            let f = frame_at(t, t);
+            // After the merger both centres carry the remnant's mass.
+            let b = &f.bodies[0];
+            let r = dist(f.camera.pos, b.pos);
+            let b_crit = 2.598 * (f.bodies[0].rs + f.bodies[1].rs);
+            let shadow = (b_crit / r).min(1.0).asin().to_degrees();
+            assert!(shadow > 24.0, "t={t} shadow {shadow}");
+        }
     }
 
     #[test]
@@ -491,6 +503,21 @@ mod tests {
         let late = orbital_rate(separation(T_COALESCE - 1.0));
         assert!(late > 3.0 * early);
         assert!(orbital_phase(20.0) > orbital_phase(10.0));
+    }
+
+    #[test]
+    fn camera_distance_never_overshoots_its_keys() {
+        for w in CAMERA_KEYS.windows(2) {
+            let (lo, hi) = (w[0][1].min(w[1][1]), w[0][1].max(w[1][1]));
+            for k in 0..=20 {
+                let t = w[0][0] + (w[1][0] - w[0][0]) * k as f32 / 20.0;
+                let d = camera_key(t)[0];
+                assert!(
+                    d >= lo - 0.3 && d <= hi + 0.3,
+                    "t={t} d={d} keys {lo}..{hi}"
+                );
+            }
+        }
     }
 
     #[test]

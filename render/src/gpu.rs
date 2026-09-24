@@ -183,9 +183,6 @@ fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
     let tan_x = (cam.fov_x_deg.to_radians() * 0.5).tan();
     let tan_y = tan_x * q.height as f32 / q.width as f32;
     let px_rad = 2.0 * tan_x / q.width as f32;
-    // 1 at the cut, 0 outside the dissolve window: drives the seam cloud.
-    let k = scene::dissolve(frame.t);
-    let seam = 1.0 - (2.0 * k - 1.0).abs();
     let bodies = frame.bodies.map(|b| {
         let n = normalize(b.disk_normal);
         let seed = [n[2], n[0], -n[1]];
@@ -204,7 +201,7 @@ fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
         cam_v: v4(up, tan_y),
         cam_w: v4(fwd, cam.aperture * q.aperture),
         res: [q.width, q.height, 0, 0],
-        misc: [frame.tau, 0.0, q.max_steps as f32, seam],
+        misc: [frame.tau, 0.0, q.max_steps as f32, 0.0],
         big: [
             frame.circumbinary_inner,
             frame.circumbinary_outer,
