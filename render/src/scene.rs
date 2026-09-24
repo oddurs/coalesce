@@ -22,8 +22,10 @@ pub const T_COALESCE: f32 = 41.0;
 /// After the wash peaks the scene snaps back to the opening so that frame 1440
 /// equals frame 0.
 pub const T_CUT: f32 = 58.5;
-/// The wash starts rising here.
-pub const T_WASH_START: f32 = 54.0;
+/// The wash starts rising here and is fully gone again at `T_WASH_END`, so
+/// the pure-white band around the cut lasts well under a second.
+pub const T_WASH_START: f32 = 56.0;
+pub const T_WASH_END: f32 = 59.6;
 
 pub const RINGDOWN_AMPLITUDE: f32 = 2.2;
 pub const RINGDOWN_OMEGA: f32 = 5.2;
@@ -133,7 +135,7 @@ pub fn wash(t: f32) -> f32 {
     if t < T_CUT {
         smoothstep(T_WASH_START, T_CUT, t)
     } else {
-        1.0 - smoothstep(T_CUT, LOOP_SECONDS, t)
+        1.0 - smoothstep(T_CUT, T_WASH_END, t)
     }
 }
 
