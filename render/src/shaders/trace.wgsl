@@ -25,7 +25,7 @@ struct Params {
     sky: vec4<f32>,         // star gain, nebula gain, star size, unused
     gw: vec4<f32>,          // wave speed, table t0, table dt, table length
     gw2: vec4<f32>,         // lens strength, disk ripple strength, flash, stream gain
-    ejecta: vec4<f32>,      // shell radius, brightness, width, age
+    spiral: vec4<f32>,      // spiral phase, strength, lump phase, lump strength
     bodies: array<Body, 2>,
 };
 
@@ -35,7 +35,7 @@ struct Params {
 @group(0) @binding(3) var<storage, read> gw_table: array<vec4<f32>>;
 
 const PI: f32 = 3.14159265;
-const ESCAPE_RADIUS: f32 = 150.0;
+const ESCAPE_RADIUS: f32 = 120.0;
 const ABSORB: f32 = 0.9;
 
 // ---------------------------------------------------------------- random
@@ -183,7 +183,7 @@ fn doppler(gas_vel: vec3<f32>, ray_dir: vec3<f32>) -> f32 {
 fn disk_sample(
     x: vec3<f32>, ray_dir: vec3<f32>, center: vec3<f32>, center_vel: vec3<f32>,
     normal: vec3<f32>, tangent: vec3<f32>, mass: f32, rs_grav: f32,
-    inner: f32, outer: f32, gain: f32, temp_in: f32, seed: f32, thick: f32, scale: f32, ripple: f32,
+    inner: f32, outer: f32, gain: f32, temp_in: f32, seed: f32, thick: f32, scale: f32, ripple: f32, driven: f32,
 ) -> DiskSample {
     var out: DiskSample;
     out.emission = vec3<f32>(0.0);
@@ -217,6 +217,16 @@ fn disk_sample(
     let n = n1 * 0.55 + rings * 0.3 + fine * 0.15;
     let n2 = fine;
     var dens = pow(smoothstep(0.40, 0.72, n), 1.2);
+    if (driven > 0.0) {
+        // Two-armed trailing spiral locked to the binary, and the lopsided
+        // overdensity that orbits the cavity edge. Both fade outward.
+        let wind = 3.0 * log(max(r, inner) / inner);
+        let arms = cos(2.0 * (phi - P.spiral.x) + 2.0 * wind);
+        let arm_fade = exp(-(r - inner) / (0.6 * (outer - inner)));
+        let lump = cos(phi - P.spiral.z);
+        let lump_fade = exp(-(r - inner) / (0.25 * inner));
+        dens *= (1.0 + P.spiral.y * driven * arms * arm_fade) * (1.0 + P.spiral.w * driven * lump * lump_fade);
+    }
     let edge_in = smoothstep(inner * 0.85, inner * 1.05, r);
     let edge_out = 1.0 - smoothstep(outer * 0.8, outer * 1.15, r);
     let vertical = exp(-zn * zn);
@@ -276,7 +286,7 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
         let s = disk_sample(
             x, dir, b.pos_rs.xyz, b.vel_mass.xyz, b.normal.xyz, b.tangent.xyz,
             b.vel_mass.w, b.pos_rs.w, b.disk.x, b.disk.y, b.disk.z, b.disk.w,
-            f32(i) * 7.3, 0.06, 1.0, 0.0,
+            f32(i) * 7.3, 0.06, 1.0, 0.0, 0.0,
         );
         total.emission += s.emission;
         total.density += s.density;
@@ -290,7 +300,7 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
     let ripple = P.gw2.y * wave.h * length(x.xz);
     let big = disk_sample(
         x, dir, vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0),
-        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.012, 2.5, ripple,
+        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.012, 2.5, ripple, 1.0,
     );
     total.emission += big.emission;
     total.density += big.density;
@@ -299,29 +309,6 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
     let rc = length(x);
     if (flash > 0.0) {
         total.emission += bb_color(7500.0) * exp(-rc / 3.5) * 0.4 * flash;
-    }
-    // Ejecta: the blast shell. Thin bright front, sparse tail behind it, both
-    // fading as the gas dilutes. Texture co-moves with the front.
-    let ej = P.ejecta;
-    if (ej.y > 0.0 && ej.x > 0.5) {
-        let d = rc - ej.x;
-        let w_in = 0.12 * ej.x + 1.0;
-        var profile = 0.0;
-        if (d > 0.0) { profile = exp(-(d * d) / (ej.z * ej.z)); }
-        else { profile = 0.06 * exp(d / w_in); }
-        if (profile > 0.002) {
-            let dirn = x / max(rc, 0.5);
-            let q = (x - dirn * ej.x) * 0.12 + vec3<f32>(0.0, ej.w * 0.05, 0.0);
-            let n1 = fbm(q, 4);
-            let n2 = fbm(q * 3.7 + vec3<f32>(n1 * 2.0), 3);
-            let clumps = pow(smoothstep(0.42, 0.78, n1 * 0.65 + n2 * 0.35), 2.0);
-            let strength = min(ej.y / 0.12, 1.0);
-            let dens = profile * clumps * strength * (0.15 + 0.85 * smoothstep(0.0, 1.0, ej.x / 12.0));
-            let temp = mix(6500.0, 4200.0, smoothstep(0.0, 40.0, ej.x));
-            let dilute = pow(10.0 / max(ej.x, 10.0), 0.8);
-            total.emission += bb_color(temp) * dens * ej.y * dilute * 1.0;
-            total.density += dens * 0.25;
-        }
     }
     return total;
 }
@@ -412,10 +399,6 @@ fn step_limit(x: vec3<f32>) -> f32 {
         h = min(h, disk_step_limit(x, b.pos_rs.xyz, b.normal.xyz, b.disk.x, b.disk.y, b.disk.z, 0.06, 1.0));
     }
     h = min(h, disk_step_limit(x, vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), P.big.x, P.big.y, P.big.z, 0.012, 2.5));
-    if (P.ejecta.y > 0.0) {
-        let d = length(x) - P.ejecta.x;
-        if (d > -0.5 * P.ejecta.x - 4.0 && d < 3.0 * P.ejecta.z) { h = min(h, 0.35); }
-    }
     return h;
 }
 

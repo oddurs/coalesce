@@ -166,7 +166,7 @@ impl Session {
     }
 
     /// Trace loop time `t`. Inside the seam window both sides of the cut are
-    /// traced and mixed in linear light, hidden by the ejecta engulfing the camera.
+    /// traced and mixed in linear light: the fall into the remnant's shadow.
     fn trace(&mut self, t: f32, q: &Quality) -> Result<Hdr, String> {
         let k = scene::dissolve(t);
         if k <= 0.0 || k >= 1.0 {
@@ -206,6 +206,7 @@ impl Session {
             hdr,
             look,
             scene::flash(scene::physical_time(t)),
+            scene::exposure(scene::physical_time(t)),
             index,
         )
     }

@@ -132,7 +132,7 @@ struct TraceParams {
     sky: [f32; 4],
     gw: [f32; 4],
     gw2: [f32; 4],
-    ejecta: [f32; 4],
+    spiral: [f32; 4],
     bodies: [GpuBody; 2],
 }
 
@@ -178,7 +178,15 @@ fn v4(v: [f32; 3], w: f32) -> [f32; 4] {
 fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
     let cam = &frame.camera;
     let fwd = normalize(sub(cam.look_at, cam.pos));
-    let right = normalize(cross(fwd, cam.up));
+    let right0 = normalize(cross(fwd, cam.up));
+    let up0 = cross(right0, fwd);
+    // Roll about the view axis.
+    let (sr, cr) = cam.roll_deg.to_radians().sin_cos();
+    let right = normalize([
+        right0[0] * cr + up0[0] * sr,
+        right0[1] * cr + up0[1] * sr,
+        right0[2] * cr + up0[2] * sr,
+    ]);
     let up = cross(right, fwd);
     let tan_x = (cam.fov_x_deg.to_radians() * 0.5).tan();
     let tan_y = tan_x * q.height as f32 / q.width as f32;
@@ -221,12 +229,7 @@ fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
             frame.flash,
             if frame.merged { 0.0 } else { 1.0 },
         ],
-        ejecta: [
-            frame.ejecta.radius,
-            frame.ejecta.brightness,
-            frame.ejecta.width,
-            frame.ejecta.age,
-        ],
+        spiral: [frame.spiral_phase, 0.45, frame.lump_phase, 0.6],
         bodies,
     }
 }
@@ -526,6 +529,7 @@ impl Post {
         hdr: &Hdr,
         look: &Look,
         flash: f32,
+        exposure: f32,
         frame_index: u32,
     ) -> Result<Vec<f32>, String> {
         let (width, height) = (hdr.width, hdr.height);
@@ -690,7 +694,7 @@ impl Post {
             src_buf: 0,
             dst_buf: 4,
             mode: 2,
-            g: [look.exposure, 0.0, look.bloom, look.streak],
+            g: [look.exposure * exposure, 0.0, look.bloom, look.streak],
             h: [look.halation, look.aberration, look.vignette, look.grain],
             k: [look.distortion, look.saturation, flash, 0.0],
             levels: level_table,

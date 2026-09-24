@@ -200,7 +200,7 @@ fn composite(p: vec2<u32>) {
 
     // Flash: the merger kicks the exposure for a few frames.
     let flash = U.k.z;
-    c *= U.g.x * (1.0 + 1.2 * flash);
+    c *= U.g.x * (1.0 + 0.8 * flash);
 
     // Vignette, tighter across the short axis like a real anamorphic.
     let vig = 1.0 - U.h.z * smoothstep(0.15, 1.1, dot(centred * vec2<f32>(0.8, 1.15), centred * vec2<f32>(0.8, 1.15)));

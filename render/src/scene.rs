@@ -24,12 +24,16 @@ pub const T_COALESCE: f32 = 48.0;
 pub const T_CUT: f32 = 58.5;
 /// Half-width of the fade, in seconds.
 pub const DISSOLVE: f32 = 1.0;
-/// Ejecta shell speed, scene units per loop second.
-pub const EJECTA_SPEED: f32 = 3.8;
+/// The last orbit plays in slow motion: loop time loses this much physical
+/// time across the window ending at coalescence.
+pub const SLOW_MOTION: f32 = 0.6;
+pub const SLOW_MOTION_START: f32 = 46.4;
 
 pub const RINGDOWN_AMPLITUDE: f32 = 3.0;
 pub const RINGDOWN_OMEGA: f32 = 4.6;
-pub const RINGDOWN_TAU: f32 = 2.6;
+/// Schwarzschild l=2 ringing has a quality factor near two: the remnant
+/// rings a couple of times and goes quiet.
+pub const RINGDOWN_TAU: f32 = 1.1;
 
 /// Visual speed of gravitational-wave ripples, scene units per loop second.
 pub const GW_SPEED: f32 = 13.0;
@@ -61,6 +65,8 @@ pub struct Camera {
     pub pos: [f32; 3],
     pub look_at: [f32; 3],
     pub up: [f32; 3],
+    /// Roll about the view axis, degrees. Positive tilts the horizon clockwise.
+    pub roll_deg: f32,
     pub fov_x_deg: f32,
     pub aperture: f32,
     pub focus_distance: f32,
@@ -80,18 +86,13 @@ pub struct Frame {
     pub camera: Camera,
     /// Merger flash, 0 except in the two seconds after coalescence.
     pub flash: f32,
-    pub ejecta: Ejecta,
+    /// Exposure multiplier for the grade: a dark overture that builds.
+    pub exposure: f32,
+    /// Phase of the two-armed spiral wave the binary drives in the big disk.
+    pub spiral_phase: f32,
+    /// Phase of the lopsided overdensity orbiting the cavity edge.
+    pub lump_phase: f32,
     pub merged: bool,
-}
-
-/// The shell of gas blown out by the merger.
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub struct Ejecta {
-    pub radius: f32,
-    pub brightness: f32,
-    pub width: f32,
-    /// Seconds since launch; drives the turbulence texture.
-    pub age: f32,
 }
 
 pub fn frame_time(frame: u32) -> f32 {
@@ -102,7 +103,14 @@ pub fn frame_time(frame: u32) -> f32 {
 /// opening is playing at negative physical time.
 pub fn physical_time(t: f32) -> f32 {
     let t = t.rem_euclid(LOOP_SECONDS);
-    if t < T_CUT { t } else { t - LOOP_SECONDS }
+    if t < T_CUT {
+        // Slow motion across the last orbit: physical time falls behind loop
+        // time by SLOW_MOTION, smoothly, so coalescence lands a little later.
+        let window_end = T_COALESCE + SLOW_MOTION;
+        t - SLOW_MOTION * smoothstep(SLOW_MOTION_START, window_end, t)
+    } else {
+        t - LOOP_SECONDS
+    }
 }
 
 /// Separation of the two bodies. Peters inspiral before coalescence, a damped
@@ -120,7 +128,7 @@ pub fn separation(tau: f32) -> f32 {
 /// the opening orbit takes about twelve seconds and capped so the final orbits
 /// stay readable.
 pub fn orbital_rate(d: f32) -> f32 {
-    const K: f32 = 30.0;
+    const K: f32 = 24.0;
     const MAX: f32 = 7.5;
     (K * d.abs().max(0.5).powf(-1.5)).min(MAX)
 }
@@ -183,18 +191,18 @@ pub fn shake(tau: f32) -> [f32; 3] {
     ]
 }
 
-/// Ejecta shell state at physical time `tau`.
-pub fn ejecta(tau: f32) -> Ejecta {
-    if tau < T_COALESCE {
-        return Ejecta::default();
-    }
-    let s = tau - T_COALESCE;
-    Ejecta {
-        radius: EJECTA_SPEED * s,
-        brightness: 0.6 * (-s / 1.4).exp() + 0.12,
-        width: 1.5 + 0.1 * EJECTA_SPEED * s,
-        age: s,
-    }
+/// Exposure arc: a dark overture, a build through the dance, the flash, then
+/// the calm and the fall.
+pub fn exposure(tau: f32) -> f32 {
+    let build = 0.72 + 0.28 * smoothstep(6.0, 34.0, tau) + 0.3 * smoothstep(38.0, 47.5, tau);
+    let settle = 1.0 - 0.3 * smoothstep(48.5, 53.0, tau);
+    let fall = 1.0 - 0.15 * smoothstep(55.0, 58.0, tau);
+    build * settle * fall
+}
+
+/// Angular rate of the cavity-edge overdensity: Keplerian at the cavity.
+pub fn lump_rate(cavity: f32) -> f32 {
+    orbital_rate(cavity)
 }
 
 /// Gravitational-wave strain amplitude at unit distance and phase, as a
@@ -243,25 +251,28 @@ pub fn gw_table() -> Vec<[f32; 4]> {
     rows
 }
 
-/// Catmull-Rom keyframes for the camera: (tau, distance, elevation deg, azimuth deg, fov deg).
-const CAMERA_KEYS: [[f32; 5]; 12] = [
-    [-6.0, 96.0, 9.5, -18.0, 34.0],
-    [0.0, 90.0, 9.0, 0.0, 34.0],
-    [14.0, 62.0, 8.0, 30.0, 36.0],
-    [28.0, 46.0, 7.0, 62.0, 38.0],
-    [40.0, 36.0, 8.0, 92.0, 40.0],
-    [46.0, 31.0, 12.0, 108.0, 42.0],
-    [48.5, 29.0, 15.0, 114.0, 42.0],
-    [52.0, 26.0, 26.0, 126.0, 40.0],
-    [56.0, 17.0, 32.0, 144.0, 40.0],
-    [57.5, 13.5, 35.0, 154.0, 40.0],
-    [58.5, 5.5, 36.0, 160.0, 40.0],
-    [61.0, 4.0, 36.0, 168.0, 40.0],
+/// Camera keyframes: (tau, distance, elevation deg, azimuth deg, fov deg, roll deg).
+/// Distances step down roughly geometrically so the approach eases in on its
+/// own; the plunge at the end is the one fast move.
+const CAMERA_KEYS: [[f32; 6]; 13] = [
+    [-6.0, 100.0, 8.0, -14.0, 32.0, 0.0],
+    [0.0, 94.0, 7.5, 0.0, 32.0, 0.0],
+    [8.0, 80.0, 7.0, 16.0, 33.0, 0.0],
+    [22.0, 58.0, 6.5, 44.0, 35.0, 0.0],
+    [34.0, 43.0, 6.5, 76.0, 37.0, 2.0],
+    [42.0, 34.0, 7.0, 102.0, 39.0, 5.0],
+    [46.5, 30.0, 9.0, 118.0, 41.0, 8.0],
+    [48.6, 28.0, 12.0, 125.0, 42.0, 9.0],
+    [52.0, 27.0, 20.0, 134.0, 40.0, 6.0],
+    [55.0, 22.0, 28.0, 144.0, 40.0, 2.0],
+    [57.5, 13.5, 33.0, 154.0, 40.0, -5.0],
+    [58.5, 5.5, 35.0, 160.0, 40.0, -10.0],
+    [61.0, 4.0, 35.0, 168.0, 40.0, -14.0],
 ];
 
 /// Cubic Hermite with finite-difference tangents in real time, so unevenly
 /// spaced keys do not overshoot.
-fn camera_key(tau: f32) -> [f32; 4] {
+fn camera_key(tau: f32) -> [f32; 5] {
     let n = CAMERA_KEYS.len();
     let tau = tau.clamp(CAMERA_KEYS[0][0], CAMERA_KEYS[n - 1][0]);
     let mut i = 0;
@@ -271,7 +282,7 @@ fn camera_key(tau: f32) -> [f32; 4] {
     let (k1, k2) = (CAMERA_KEYS[i], CAMERA_KEYS[i + 1]);
     let dt = k2[0] - k1[0];
     let s = ((tau - k1[0]) / dt).clamp(0.0, 1.0);
-    let slope = |a: [f32; 5], b: [f32; 5], j: usize| (b[j] - a[j]) / (b[0] - a[0]);
+    let slope = |a: [f32; 6], b: [f32; 6], j: usize| (b[j] - a[j]) / (b[0] - a[0]);
     // Fritsch-Carlson limiting: flat where the slope changes sign, and never
     // more than three times the gentler neighbour.
     let tangent = |idx: usize, j: usize| {
@@ -300,7 +311,7 @@ fn camera_key(tau: f32) -> [f32; 4] {
         -2.0 * s * s * s + 3.0 * s * s,
         s * s * s - s * s,
     );
-    let mut out = [0.0; 4];
+    let mut out = [0.0; 5];
     for (j, o) in out.iter_mut().enumerate() {
         let (m1, m2) = (tangent(i, j + 1) * dt, tangent(i + 1, j + 1) * dt);
         *o = h00 * k1[j + 1] + h10 * m1 + h01 * k2[j + 1] + h11 * m2;
@@ -308,19 +319,32 @@ fn camera_key(tau: f32) -> [f32; 4] {
     out
 }
 
+/// Organic drift, a few slow sines. Scaled with distance so it stays a
+/// fraction of a degree on screen, and grows a little as the dance tightens.
+pub fn sway(tau: f32, dist: f32) -> [f32; 3] {
+    let a = 0.012 * dist * (1.0 + 0.6 * smoothstep(30.0, 47.0, tau));
+    [
+        a * ((0.37 * tau + 1.0).sin() + 0.5 * (0.91 * tau).sin()),
+        a * 0.6 * ((0.29 * tau).sin() + 0.5 * (0.73 * tau + 2.0).sin()),
+        a * ((0.41 * tau + 2.0).sin() + 0.5 * (0.83 * tau + 1.0).sin()),
+    ]
+}
+
 pub fn camera(tau: f32) -> Camera {
-    let [dist, elev, azim, fov] = camera_key(tau);
+    let [dist, elev, azim, fov, roll] = camera_key(tau);
     let (el, az) = (elev.to_radians(), azim.to_radians());
     let jolt = shake(tau);
+    let drift = sway(tau, dist);
     let pos = [
-        dist * el.cos() * az.sin() + jolt[0],
-        dist * el.sin() + jolt[1],
-        dist * el.cos() * az.cos() + jolt[2],
+        dist * el.cos() * az.sin() + jolt[0] + drift[0],
+        dist * el.sin() + jolt[1] + drift[1],
+        dist * el.cos() * az.cos() + jolt[2] + drift[2],
     ];
     Camera {
         pos,
         look_at: [0.0, 0.4, 0.0],
         up: [0.0, 1.0, 0.0],
+        roll_deg: roll,
         fov_x_deg: fov,
         aperture: 0.0,
         focus_distance: dist,
@@ -371,6 +395,9 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
         let tidal = 0.36 * d.abs();
         let disk_outer = tidal.max(disk_inner * 1.25);
         let strip = smoothstep(3.0, 6.0, d.abs());
+        // Tidal heating: the closer the pair, the harder the disks are stirred.
+        let squeeze = (1.0 - d.abs() / D0).clamp(0.0, 1.0);
+        let heat = 1.0 + 1.5 * squeeze * squeeze;
         bodies[i] = Body {
             pos: [offsets[i] * dir[0], 0.0, offsets[i] * dir[2]],
             vel: [speed * tangent[0], 0.0, speed * tangent[2]],
@@ -378,8 +405,8 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
             rs,
             disk_inner,
             disk_outer,
-            disk_gain: if merged { 0.0 } else { 0.45 * strip },
-            disk_temp: 6800.0,
+            disk_gain: if merged { 0.0 } else { 0.45 * strip * heat },
+            disk_temp: 6800.0 + 1800.0 * squeeze,
             disk_normal: [
                 tilts[i].sin() * dir[2],
                 tilts[i].cos(),
@@ -394,8 +421,10 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
         let grow = smoothstep(0.0, 8.0, s);
         bodies[0].disk_inner = 3.0 * 2.0 * (1.0 - MERGER_LOSS);
         bodies[0].disk_outer = bodies[0].disk_inner * (1.3 + 1.7 * grow);
-        bodies[0].disk_gain = 0.5 * smoothstep(0.0, 2.5, s);
-        bodies[0].disk_temp = 6200.0;
+        // Shocked disk gas flashes white-hot and cools back to amber.
+        let f = flash(tau);
+        bodies[0].disk_gain = 0.5 * smoothstep(0.0, 2.5, s) + 2.5 * f;
+        bodies[0].disk_temp = 6200.0 + 2800.0 * f;
         bodies[0].disk_normal = [0.0, 1.0, 0.0];
         bodies[0].vel = [0.0; 3];
         bodies[1].vel = [0.0; 3];
@@ -417,7 +446,9 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
         circumbinary_gain: 1.2,
         camera: camera(tau),
         flash: flash(tau),
-        ejecta: ejecta(tau),
+        exposure: exposure(tau),
+        spiral_phase: phi,
+        lump_phase: lump_rate(circumbinary_inner) * tau,
         merged,
     }
 }
@@ -439,12 +470,29 @@ mod tests {
     }
 
     #[test]
-    fn ejecta_exists_only_after_the_merger() {
-        assert_eq!(ejecta(20.0), Ejecta::default());
-        assert_eq!(ejecta(-1.0), Ejecta::default());
-        let e = ejecta(T_COALESCE + 5.0);
-        assert!((e.radius - 5.0 * EJECTA_SPEED).abs() < 1e-4);
-        assert!(e.brightness > 0.12);
+    fn slow_motion_holds_the_last_orbit() {
+        // Physical time never runs backwards and never below half speed.
+        let mut prev = physical_time(0.0);
+        for n in 1..(T_CUT * FPS) as u32 {
+            let tau = physical_time(n as f32 / FPS);
+            let rate = (tau - prev) * FPS;
+            assert!(rate > 0.35 && rate <= 1.001, "frame {n} rate {rate}");
+            prev = tau;
+        }
+        // Coalescence lands later in loop time than in physical time.
+        assert!(physical_time(T_COALESCE + SLOW_MOTION) - T_COALESCE < 1e-3);
+        assert!(physical_time(T_COALESCE) < T_COALESCE);
+    }
+
+    #[test]
+    fn exposure_arc_builds_to_the_merger() {
+        assert!(exposure(0.0) < exposure(30.0));
+        assert!(exposure(30.0) < exposure(47.5));
+        assert!(exposure(52.0) < exposure(47.5));
+        for t in 0..60 {
+            let e = exposure(t as f32);
+            assert!(e > 0.5 && e < 1.5);
+        }
     }
 
     #[test]
