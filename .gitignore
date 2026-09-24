@@ -13,3 +13,5 @@ out/
 .idea/
 .env*
 !.env.example
+web/static/video/*
+!web/static/video/.gitkeep
