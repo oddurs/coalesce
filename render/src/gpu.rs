@@ -202,7 +202,7 @@ fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
             frame.circumbinary_gain,
             3900.0,
         ],
-        sky: [q.sky, q.sky, px_rad / 3.5 * 1.6, 0.0],
+        sky: [q.sky, q.sky, px_rad * 1.1, 0.0],
         bodies,
     }
 }
@@ -398,7 +398,7 @@ impl Default for Look {
             bloom: 0.55,
             streak: 0.45,
             halation: 0.2,
-            aberration: 0.006,
+            aberration: 0.0015,
             vignette: 0.35,
             grain: 0.028,
             distortion: 0.04,

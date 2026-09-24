@@ -189,7 +189,7 @@ pub fn camera(tau: f32) -> Camera {
         look_at: [0.0, 0.4, 0.0],
         up: [0.0, 1.0, 0.0],
         fov_x_deg: fov,
-        aperture: 0.0008 * dist,
+        aperture: 0.0,
         focus_distance: dist,
     }
 }

@@ -231,6 +231,17 @@ fn octa_encode(d: vec3<f32>) -> vec2<f32> {
     return uv * 0.5 + 0.5;
 }
 
+fn octa_decode(uv_in: vec2<f32>) -> vec3<f32> {
+    let f = uv_in * 2.0 - 1.0;
+    var n = vec3<f32>(f.x, 1.0 - abs(f.x) - abs(f.y), f.y);
+    let t = clamp(-n.y, 0.0, 1.0);
+    n.x += select(t, -t, n.x >= 0.0);
+    n.z += select(t, -t, n.z >= 0.0);
+    return normalize(n);
+}
+
+// `size` is the star's angular sigma in radians; the shape is measured on the
+// sphere so stars stay round everywhere on the octahedral map.
 fn star_layer(d: vec3<f32>, cells: f32, density: f32, salt: u32, size: f32) -> vec3<f32> {
     let uv = octa_encode(d) * cells;
     let base = vec2<i32>(floor(uv));
@@ -241,8 +252,10 @@ fn star_layer(d: vec3<f32>, cells: f32, density: f32, salt: u32, size: f32) -> v
             let h = hash3v(vec3<i32>(c.x, c.y, 0), salt);
             if (h.x > density) { continue; }
             let pos = vec2<f32>(c) + hash3v(vec3<i32>(c.x, c.y, 1), salt).xy;
-            let delta = uv - pos;
-            let dist2 = dot(delta, delta) / (size * size);
+            let star_dir = octa_decode(pos / cells);
+            let cosang = clamp(dot(d, star_dir), -1.0, 1.0);
+            let ang = sqrt(max(2.0 * (1.0 - cosang), 0.0));
+            let dist2 = ang * ang / (size * size);
             let mag = pow(h.y, 9.0) * 24.0 + 0.02;
             let temp = 2500.0 + 12000.0 * h.z * h.z;
             col += bb_color(temp) * mag * exp(-dist2);
@@ -254,9 +267,9 @@ fn star_layer(d: vec3<f32>, cells: f32, density: f32, salt: u32, size: f32) -> v
 fn sky(d: vec3<f32>) -> vec3<f32> {
     let px_size = P.sky.z;
     var col = vec3<f32>(0.0);
-    col += star_layer(d, 900.0, 0.012, 11u, px_size * 900.0 * 0.55) * 0.8;
-    col += star_layer(d, 2400.0, 0.012, 23u, px_size * 2400.0 * 0.45) * 0.06;
-    col += star_layer(d, 300.0, 0.006, 37u, px_size * 300.0 * 0.7) * 3.0;
+    col += star_layer(d, 900.0, 0.012, 11u, px_size * 1.0) * 0.8;
+    col += star_layer(d, 2400.0, 0.012, 23u, px_size * 0.8) * 0.06;
+    col += star_layer(d, 300.0, 0.006, 37u, px_size * 1.3) * 3.0;
     col *= P.sky.x;
 
     // Nebula: faint warm dust and a cold gas band, well below the disks.
@@ -362,7 +375,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let fwd = P.cam_w.xyz;
     let dir_pin = normalize(fwd + P.cam_u.xyz * ndc.x * P.cam_u.w + P.cam_v.xyz * ndc.y * P.cam_v.w);
 
-    // Thin lens with an anamorphic aperture: tall oval bokeh.
+    // Thin lens with an anamorphic aperture: tall oval bokeh. The production
+    // camera is a pinhole; bokeh needs far more samples than the disks do.
     let focus = P.cam_pos.xyz + dir_pin * (P.cam_pos.w / dot(dir_pin, fwd));
     let ang = rand() * 2.0 * PI;
     let rad = sqrt(rand()) * P.cam_w.w;

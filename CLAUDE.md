@@ -29,4 +29,6 @@ served as a fullscreen video by a SvelteKit site.
 - Units: gravitational radius of the total mass is 1. Scene time is loop seconds.
 - The loop is 1440 frames at 24 fps. Frame 0 and frame 1440 are the same image by
   construction; the loop point sits inside the light wash at the end of the ringdown.
-- Look-dev at 1920x1010 with low samples. Final at 4096x2160.
+- Look-dev at 1920x1010 with low samples (`scripts/render --preview --t <s>`). Final at 4096x2160.
+- A look change alone is `render post` over the EXRs; only physics or geometry changes need a retrace.
+- Check stills at 1:1 at 4K before trusting a look; previews hid disk aliasing and bokeh noise.
