@@ -1,11 +1,5 @@
-pub fn greeting() -> &'static str {
-    "black-hole renderer"
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn greets() {
-        assert_eq!(super::greeting(), "black-hole renderer");
-    }
-}
+pub mod blackbody;
+pub mod geodesic;
+pub mod gpu;
+pub mod image;
+pub mod scene;

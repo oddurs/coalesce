@@ -1,0 +1,30 @@
+#!/bin/sh
+# Encode a frame directory into a ProRes master and web deliverables.
+# usage: scripts/encode [frames-dir] [out-dir]
+set -eu
+cd "$(dirname "$0")/.."
+frames=${1:-out/frames}/png
+out=${2:-out/video}
+mkdir -p "$out"
+n=$(ls "$frames"/frame_*.png | wc -l | tr -d ' ')
+[ "$n" -eq 1440 ] || echo "warning: $n frames, expected 1440" >&2
+
+# Master: ProRes 4444, full-range 4:4:4 10-bit, no loss the eye can find.
+ffmpeg -y -loglevel error -stats -framerate 24 -i "$frames/frame_%04d.png" \
+  -c:v prores_ks -profile:v 4 -pix_fmt yuv444p10le -vendor apl0 \
+  -color_primaries bt709 -color_trc iec61966-2-1 -colorspace bt709 \
+  "$out/master.mov"
+
+# Web: 10-bit HEVC and AV1 at native size, H.264 at 1080p as the fallback.
+ffmpeg -y -loglevel error -stats -i "$out/master.mov" \
+  -c:v libx265 -preset slow -crf 17 -pix_fmt yuv420p10le -tag:v hvc1 \
+  -x265-params "keyint=48:min-keyint=48:no-open-gop=1" -movflags +faststart -an \
+  "$out/loop-4k.mp4"
+ffmpeg -y -loglevel error -stats -i "$out/master.mov" \
+  -c:v libsvtav1 -preset 5 -crf 28 -pix_fmt yuv420p10le -g 48 -movflags +faststart -an \
+  "$out/loop-4k-av1.mp4"
+ffmpeg -y -loglevel error -stats -i "$out/master.mov" -vf scale=1920:-2 \
+  -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -g 48 -movflags +faststart -an \
+  "$out/loop-1080.mp4"
+ffmpeg -y -loglevel error -i "$frames/frame_0000.png" -vf scale=1920:-2 -q:v 3 "$out/poster.jpg"
+ls -la "$out"

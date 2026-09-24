@@ -1,0 +1,16 @@
+#!/bin/sh
+# Render the loop. `--preview` renders one look-dev still, `--lo` a quick
+# low-resolution pass of the whole loop, otherwise the full 4K loop, resumable.
+set -eu
+cd "$(dirname "$0")/.."
+cargo build --release -q -p render
+case "${1:-}" in
+  --preview)
+    shift
+    exec target/release/render still --preview --spp 8 --out out/preview/still.png "$@" ;;
+  --lo)
+    shift
+    exec target/release/render frames --width 960 --height 506 --spp 2 --steps 500 --out out/loop-lo "$@" ;;
+  *)
+    exec target/release/render frames --width 4096 --height 2160 --spp 16 --steps 900 --out out/frames "$@" ;;
+esac
