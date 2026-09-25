@@ -9,7 +9,7 @@ use wgpu::util::DeviceExt;
 
 use crate::blackbody;
 use crate::image::Hdr;
-use crate::scene::{self, Frame};
+use crate::scene::{self, Frame, cross, normalize};
 
 pub struct Gpu {
     pub device: wgpu::Device,
@@ -152,19 +152,6 @@ pub struct Quality {
     /// Gravitational-wave lensing and disk ripple strengths.
     pub wave_lens: f32,
     pub wave_ripple: f32,
-}
-
-fn normalize(v: [f32; 3]) -> [f32; 3] {
-    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-9);
-    [v[0] / l, v[1] / l, v[2] / l]
-}
-
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
 }
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
