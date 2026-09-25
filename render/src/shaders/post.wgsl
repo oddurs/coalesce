@@ -186,9 +186,12 @@ fn composite(p: vec2<u32>) {
 
     // Grade in scene-linear, a split tone: dim gas leans to embers, the hot
     // core stays cream. Multiplicative, so space stays black; a lifted teal
-    // shadow here turned the dim disk brown.
+    // shadow here turned the dim disk brown. Weighted by how warm the pixel
+    // already is, so white and blue stars stay a cool counterpoint.
     let lum = luminance(c);
-    c *= mix(vec3<f32>(1.14, 0.84, 0.62), vec3<f32>(1.04, 0.99, 0.92), smoothstep(0.02, 1.5, lum));
+    let warmth = smoothstep(0.05, 0.4, (c.r - c.b) / (c.r + c.b + 1e-4));
+    let tone = mix(vec3<f32>(1.14, 0.84, 0.62), vec3<f32>(1.04, 0.99, 0.92), smoothstep(0.02, 1.5, lum));
+    c *= mix(vec3<f32>(1.0), tone, warmth);
 
     // Saturation in scene-linear, before the curve bends it.
     let cl = luminance(c);
