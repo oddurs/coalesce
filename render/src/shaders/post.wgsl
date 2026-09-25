@@ -16,7 +16,7 @@ struct Pass {
     frame: u32,
     pad0: u32,
     pad1: u32,
-    f: vec4<f32>,       // blur: dir.xy, radius, sigma | downsample: knee
+    f: vec4<f32>,       // blur: dir.xy, radius, sigma | downsample: knee, threshold
     g: vec4<f32>,       // composite: exposure, unused, bloom, streak
     h: vec4<f32>,       // composite: halation, aberration, vignette, grain
     k: vec4<f32>,       // composite: distortion, saturation, unused, unused
@@ -85,6 +85,11 @@ fn downsample(p: vec2<u32>) {
         let l = luminance(c);
         let k = smoothstep(0.0, U.f.x, l);
         c *= k;
+    }
+    if (U.f.y > 0.0) {
+        // Hard threshold: only highlights far above the gas feed the streak.
+        let l = luminance(c);
+        c *= max(l - U.f.y, 0.0) / max(l, 1e-6);
     }
     store(U.dst_buf, U.dst_off, U.dst_size, p, c);
 }
@@ -172,7 +177,7 @@ fn composite(p: vec2<u32>) {
     let l1 = U.levels[1];
     let hal = bilinear(1u, l1.z, l1.xy, uv) * vec3<f32>(1.0, 0.32, 0.12);
     // Anamorphic streak from the streak buffer, cold blue.
-    let sl = U.levels[2];
+    let sl = U.levels[0];
     let st = bilinear(3u, 0u, sl.xy, uv) * vec3<f32>(0.75, 0.82, 1.08);
 
     var c = base + bloom * U.g.z + hal * U.h.x + st * U.g.w;
