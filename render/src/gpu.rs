@@ -630,7 +630,9 @@ impl Post {
                 f: [knee, 0.0, 0.0, 0.0],
                 ..blank
             });
-            let radius = 4 + i as u32;
+            // Radii scale with the frame so a preview glows like the 4K final;
+            // fixed pixel radii made the 4K glow half as wide.
+            let radius = ((4 + i) as f32 * width as f32 / 1920.0).round().max(1.0) as u32;
             passes.push(PassParams {
                 src_size: [lv.w, lv.h],
                 dst_size: [lv.w, lv.h],
