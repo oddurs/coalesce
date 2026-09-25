@@ -160,9 +160,10 @@ fn composite(p: vec2<u32>) {
         bilinear(0u, 0u, U.src_size, 0.5 + dir * (1.0 - ca)).b,
     );
 
-    // Bloom: sum of the pyramid, lower levels weighted more for a wide glow.
+    // Bloom: sum of the pyramid, weighted to the finer levels. Glare hugs the
+    // hot gas; weighting the widest levels laid a veil over the shadows.
     var bloom = vec3<f32>(0.0);
-    let weights = array<f32, 6>(0.12, 0.16, 0.2, 0.22, 0.18, 0.12);
+    let weights = array<f32, 6>(0.24, 0.26, 0.22, 0.14, 0.09, 0.05);
     for (var l = 0; l < 6; l++) {
         let lv = U.levels[l];
         bloom += weights[l] * bilinear(1u, lv.z, lv.xy, uv);

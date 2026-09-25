@@ -432,7 +432,7 @@ impl Default for Look {
         Look {
             exposure: 1.1,
             bloom: 0.5,
-            streak: 0.5,
+            streak: 0.15,
             halation: 0.22,
             aberration: 0.0015,
             vignette: 0.35,
