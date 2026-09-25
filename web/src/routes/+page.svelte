@@ -50,7 +50,7 @@
 	/>
 </svelte:head>
 
-<main onclick={play} role="presentation">
+<main onclick={play} role="presentation" style="--hero: url({base}/hero.jpg)">
 	<video
 		bind:this={video}
 		{src}
@@ -101,7 +101,12 @@
 		border-radius: 999px;
 		cursor: pointer;
 	}
+	/* No motion: the loop gives way to one still from the middle of it, not
+	   the opening frame, which is empty sky. */
 	@media (prefers-reduced-motion: reduce) {
+		main {
+			background: #000 var(--hero) center / cover no-repeat;
+		}
 		video {
 			display: none;
 		}

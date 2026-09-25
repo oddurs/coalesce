@@ -27,4 +27,6 @@ ffmpeg -y -loglevel error -stats -i "$out/master.mov" -vf scale=1920:-2 \
   -c:v libx264 -preset slow -crf 17 -pix_fmt yuv420p -g 48 -movflags +faststart -an \
   "$out/loop-1080.mp4"
 ffmpeg -y -loglevel error -i "$frames/frame_0000.png" -vf scale=1920:-2 -q:v 3 "$out/poster.jpg"
+# The still shown instead of the loop when motion is reduced: the edge-on dance.
+ffmpeg -y -loglevel error -i "$frames/frame_0816.png" -vf scale=2560:-2 -q:v 2 "$out/hero.jpg"
 ls -la "$out"
