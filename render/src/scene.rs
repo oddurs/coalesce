@@ -415,7 +415,7 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
             disk_inner,
             disk_outer,
             disk_gain: if merged { 0.0 } else { 0.45 * strip * heat },
-            disk_temp: 6800.0 + 1800.0 * squeeze,
+            disk_temp: 5200.0 + 1600.0 * squeeze,
             disk_normal: [
                 tilts[i].sin() * dir[2],
                 tilts[i].cos(),
@@ -433,7 +433,7 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
         // Shocked disk gas flashes white-hot and cools back to amber.
         let f = flash(tau);
         bodies[0].disk_gain = 0.5 * smoothstep(0.0, 2.5, s) + 2.5 * f;
-        bodies[0].disk_temp = 6200.0 + 2800.0 * f;
+        bodies[0].disk_temp = 5000.0 + 3500.0 * f;
         bodies[0].disk_normal = [0.0, 1.0, 0.0];
         bodies[0].vel = [0.0; 3];
         bodies[1].vel = [0.0; 3];

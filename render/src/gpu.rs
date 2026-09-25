@@ -216,7 +216,7 @@ fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
             frame.circumbinary_gain,
             3900.0,
         ],
-        sky: [q.sky, q.sky, px_rad * 1.1, 0.0],
+        sky: [q.sky, q.sky * 0.3, px_rad * 1.1, 0.0],
         gw: [
             scene::GW_SPEED,
             scene::GW_T0,
@@ -439,7 +439,7 @@ pub struct Look {
 impl Default for Look {
     fn default() -> Self {
         Look {
-            exposure: 1.8,
+            exposure: 1.1,
             bloom: 0.5,
             streak: 0.5,
             halation: 0.22,

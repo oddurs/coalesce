@@ -183,7 +183,7 @@ fn doppler(gas_vel: vec3<f32>, ray_dir: vec3<f32>) -> f32 {
 fn disk_sample(
     x: vec3<f32>, ray_dir: vec3<f32>, center: vec3<f32>, center_vel: vec3<f32>,
     normal: vec3<f32>, tangent: vec3<f32>, mass: f32, rs_grav: f32,
-    inner: f32, outer: f32, gain: f32, temp_in: f32, seed: f32, thick: f32, scale: f32, ripple: f32, driven: f32,
+    inner: f32, outer: f32, gain: f32, temp_in: f32, seed: f32, thick: f32, scale: f32, ripple: f32, driven: f32, falloff: f32,
 ) -> DiskSample {
     var out: DiskSample;
     out.emission = vec3<f32>(0.0);
@@ -216,7 +216,10 @@ fn disk_sample(
     let fine = fbm(q * 3.0 + vec3<f32>(seed, warp * 2.0, zn), 3);
     let n = n1 * 0.55 + rings * 0.3 + fine * 0.15;
     let n2 = fine;
-    var dens = pow(smoothstep(0.41, 0.72, n), 1.35);
+    // A continuous body of gas with turbulence carved into it. A hard threshold
+    // here leaves isolated ribbons that read as wire, not plasma.
+    let clump = smoothstep(0.3, 0.75, n);
+    var dens = 0.22 + 0.78 * clump * clump;
     if (driven > 0.0) {
         // Two-armed trailing spiral locked to the binary, and the lopsided
         // overdensity that orbits the cavity edge. Both fade outward.
@@ -241,7 +244,10 @@ fn disk_sample(
     let temp = temp_in * pow(inner / r, 0.75) * (0.85 + 0.3 * n2);
     let col = bb_color(temp * g);
     let brightness = pow(g, 3.0) * pow(temp / 6500.0, 2.4);
-    out.emission = col * brightness * dens * (0.4 + 1.2 * dens) * gain;
+    // Extra emissive falloff, separate from the gas: the outskirts burn down to
+    // embers and the hot inner edge carries the frame.
+    let glow = pow(inner / r, falloff);
+    out.emission = col * brightness * glow * dens * (0.4 + 1.2 * dens) * gain;
     out.density = dens * min(gain, 1.0);
     return out;
 }
@@ -306,14 +312,14 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
         let s = disk_sample(
             x, dir, b.pos_rs.xyz, b.vel_mass.xyz, b.normal.xyz, b.tangent.xyz,
             b.vel_mass.w, b.pos_rs.w, b.disk.x, b.disk.y, b.disk.z, b.disk.w,
-            f32(i) * 7.3, 0.06, 1.0, 0.0, 0.0,
+            f32(i) * 7.3, 0.04, 1.0, 0.0, 0.0, 0.0,
         );
         total.emission += s.emission;
         total.density += s.density;
         total.emission += corona(x, b.pos_rs.xyz, b.normal.xyz, b.disk.x, b.disk.y, b.disk.z, b.disk.w);
         if (b.disk.z > 0.0 && P.gw2.w > 0.0) {
             let st = stream_density(x, b.pos_rs.xyz, b.disk.y, P.big.x, f32(i) * 3.1) * P.gw2.w * b.disk.z;
-            total.emission += bb_color(6200.0) * st * 0.15;
+            total.emission += bb_color(4600.0) * st * 0.15;
             total.density += st * 0.15;
         }
     }
@@ -321,7 +327,7 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
     let ripple = P.gw2.y * wave.h * length(x.xz);
     let big = disk_sample(
         x, dir, vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0),
-        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.009, 2.5, ripple, 1.0,
+        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.009, 2.5, ripple, 1.0, 1.6,
     );
     total.emission += big.emission;
     total.density += big.density;
@@ -421,7 +427,7 @@ fn step_limit(x: vec3<f32>) -> f32 {
     var h = 1e9;
     for (var i = 0; i < 2; i++) {
         let b = P.bodies[i];
-        h = min(h, disk_step_limit(x, b.pos_rs.xyz, b.normal.xyz, b.disk.x, b.disk.y, b.disk.z, 0.06, 1.0));
+        h = min(h, disk_step_limit(x, b.pos_rs.xyz, b.normal.xyz, b.disk.x, b.disk.y, b.disk.z, 0.04, 1.0));
     }
     h = min(h, disk_step_limit(x, vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), P.big.x, P.big.y, P.big.z, 0.009, 2.5));
     return h;

@@ -1,5 +1,5 @@
 // Post pass over linear HDR frames: bloom pyramid, anamorphic streak,
-// halation, chromatic aberration, vignette, AgX tonemap, grade, grain, wash.
+// halation, chromatic aberration, vignette, filmic tonemap, grade, grain, wash.
 //
 // Every pass is one entry point driven by `mode`. Buffers are addressed by id so
 // one bind group serves the whole chain: 0 source, 1 mip pyramid, 2 scratch,
@@ -105,34 +105,12 @@ fn blur(p: vec2<u32>) {
 
 // ---------------------------------------------------------------- tonemap
 
-fn agx_contrast(x: vec3<f32>) -> vec3<f32> {
-    let x2 = x * x;
-    let x4 = x2 * x2;
-    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
-}
-
-fn agx(val: vec3<f32>) -> vec3<f32> {
-    let m = mat3x3<f32>(
-        vec3<f32>(0.842479062253094, 0.0423282422610123, 0.0423756549057051),
-        vec3<f32>(0.0784335999999992, 0.878468636469772, 0.0784336),
-        vec3<f32>(0.0792237451477643, 0.0791661274605434, 0.879142973793104),
-    );
-    let min_ev = -12.47393;
-    let max_ev = 4.026069;
-    var v = m * max(val, vec3<f32>(1e-10));
-    v = clamp(log2(v), vec3<f32>(min_ev), vec3<f32>(max_ev));
-    v = (v - min_ev) / (max_ev - min_ev);
-    return agx_contrast(v);
-}
-
-fn agx_eotf(val: vec3<f32>) -> vec3<f32> {
-    let m = mat3x3<f32>(
-        vec3<f32>(1.19687900512017, -0.0528968517574562, -0.0529716355144438),
-        vec3<f32>(-0.0980208811401368, 1.15190312990417, -0.0980434501171241),
-        vec3<f32>(-0.0990297440797205, -0.0989611768448433, 1.15107367264116),
-    );
-    let v = m * val;
-    return pow(max(v, vec3<f32>(0.0)), vec3<f32>(2.2));
+// Per-channel filmic curve (Narkowicz's ACES fit). Channels clip in turn, so
+// overexposed amber climbs through yellow to white the way fire and film do.
+// A hue-preserving curve held the disks flat and grey.
+fn filmic(x: vec3<f32>) -> vec3<f32> {
+    let y = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);
+    return clamp(y, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
@@ -206,18 +184,16 @@ fn composite(p: vec2<u32>) {
     let vig = 1.0 - U.h.z * smoothstep(0.15, 1.1, dot(centred * vec2<f32>(0.8, 1.15), centred * vec2<f32>(0.8, 1.15)));
     c *= vig;
 
-    // Grade in scene-linear: teal into the shadows, amber into the highlights.
+    // Grade in scene-linear, a split tone: dim gas leans to embers, the hot
+    // core stays cream. Multiplicative, so space stays black; a lifted teal
+    // shadow here turned the dim disk brown.
     let lum = luminance(c);
-    let shadow = exp(-lum * 6.0);
-    c += vec3<f32>(-0.001, 0.0008, 0.0025) * shadow;
-    c *= mix(vec3<f32>(1.0), vec3<f32>(1.06, 1.0, 0.90), smoothstep(0.3, 4.0, lum));
+    c *= mix(vec3<f32>(1.14, 0.84, 0.62), vec3<f32>(1.04, 0.99, 0.92), smoothstep(0.02, 1.5, lum));
 
-    var t = agx(c);
-    // Look: a little punch, saturation.
-    let tl = luminance(t);
-    t = mix(vec3<f32>(tl), t, U.k.y);
-    t = pow(t, vec3<f32>(1.16));
-    var lin = agx_eotf(t);
+    // Saturation in scene-linear, before the curve bends it.
+    let cl = luminance(c);
+    c = max(mix(vec3<f32>(cl), c, U.k.y), vec3<f32>(0.0));
+    let lin = filmic(c);
 
     var out = srgb_encode(clamp(lin, vec3<f32>(0.0), vec3<f32>(1.0)));
     let g = grain(p, U.frame) * U.h.w * (0.25 + 0.75 * (1.0 - luminance(out)));
