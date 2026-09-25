@@ -309,9 +309,13 @@ impl Tracer {
         }
     }
 
-    /// Render one frame. Returns premultiplied RGBA accumulation: rgb sums and
-    /// the sample count in alpha.
-    pub fn render(&mut self, gpu: &Gpu, frame: &Frame, q: &Quality) -> Result<Vec<f32>, String> {
+    /// Render one image. Sample `s` is traced through `frames[s % len]`, so
+    /// instants across the shutter give motion blur for free. Returns
+    /// premultiplied RGBA accumulation: rgb sums and the sample count in alpha.
+    pub fn render(&mut self, gpu: &Gpu, frames: &[Frame], q: &Quality) -> Result<Vec<f32>, String> {
+        if frames.is_empty() {
+            return Err("render needs at least one frame".into());
+        }
         let pixels = (q.width * q.height) as u64;
         let accum = storage_buffer(&gpu.device, "accum", pixels * 16);
         let tiles_x = q.width.div_ceil(TILE);
@@ -353,8 +357,8 @@ impl Tracer {
             ],
         });
 
-        let base = trace_params(frame, q);
         for sample in 0..q.spp {
+            let base = trace_params(&frames[sample as usize % frames.len()], q);
             // One submit per sample keeps each command buffer short.
             let mut staged = vec![0u8; (tiles * TRACE_STRIDE) as usize];
             for ty in 0..tiles_y {

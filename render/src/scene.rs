@@ -8,6 +8,8 @@
 pub const FPS: f32 = 24.0;
 pub const LOOP_SECONDS: f32 = 60.0;
 pub const LOOP_FRAMES: u32 = 1440;
+/// Shutter open time: 180 degrees, half a frame, as film is shot.
+pub const SHUTTER: f32 = 0.5 / FPS;
 
 /// Masses of the two bodies. They sum to 1.
 pub const M1: f32 = 0.58;
@@ -104,6 +106,14 @@ pub struct Frame {
 
 pub fn frame_time(frame: u32) -> f32 {
     (frame % LOOP_FRAMES) as f32 / FPS
+}
+
+/// `n` instants stratified across the shutter, centred on `t`. Tracing one
+/// sample per instant blurs motion the way an open shutter does.
+pub fn shutter_times(t: f32, n: u32) -> Vec<f32> {
+    (0..n)
+        .map(|i| t + ((i as f32 + 0.5) / n as f32 - 0.5) * SHUTTER)
+        .collect()
 }
 
 /// Loop time to physical time. The cut happens at `T_CUT`; after it the
@@ -516,6 +526,17 @@ mod tests {
         let b = frame(LOOP_SECONDS);
         assert_eq!(a, b);
         assert_eq!(frame_time(0), frame_time(LOOP_FRAMES));
+    }
+
+    #[test]
+    fn shutter_is_centred_and_half_a_frame_wide() {
+        let ts = shutter_times(10.0, 16);
+        assert_eq!(ts.len(), 16);
+        let mean = ts.iter().sum::<f32>() / 16.0;
+        assert!((mean - 10.0).abs() < 1e-5);
+        let span = ts[15] - ts[0];
+        assert!(span < SHUTTER && span > 0.9 * SHUTTER);
+        assert_eq!(shutter_times(10.0, 1), vec![10.0]);
     }
 
     #[test]

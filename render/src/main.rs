@@ -165,18 +165,23 @@ impl Session {
         Ok(Session { gpu, tracer, post })
     }
 
-    /// Trace loop time `t`. Inside the seam window both sides of the cut are
-    /// traced and mixed in linear light: the fall into the remnant's shadow.
+    /// Trace loop time `t`, one sample per instant across the shutter. Inside
+    /// the seam window both sides of the cut are traced and mixed in linear
+    /// light.
     fn trace(&mut self, t: f32, q: &Quality) -> Result<Hdr, String> {
+        let t = t.rem_euclid(scene::LOOP_SECONDS);
+        let times = scene::shutter_times(t, q.spp);
         let k = scene::dissolve(t);
         if k <= 0.0 || k >= 1.0 {
-            let frame = scene::frame(t);
-            let accum = self.tracer.render(&self.gpu, &frame, q)?;
+            let frames: Vec<_> = times.iter().map(|&s| scene::frame(s)).collect();
+            let accum = self.tracer.render(&self.gpu, &frames, q)?;
             return Ok(Hdr::from_rgba(q.width, q.height, &accum));
         }
-        let t = t.rem_euclid(scene::LOOP_SECONDS);
-        let before = scene::frame_at(t, t);
-        let after = scene::frame_at(t, t - scene::LOOP_SECONDS);
+        let before: Vec<_> = times.iter().map(|&s| scene::frame_at(s, s)).collect();
+        let after: Vec<_> = times
+            .iter()
+            .map(|&s| scene::frame_at(s, s - scene::LOOP_SECONDS))
+            .collect();
         let a = Hdr::from_rgba(
             q.width,
             q.height,
