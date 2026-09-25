@@ -475,7 +475,10 @@ fn trace(origin: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
         let k4x = v + h * k3v;
         let dx = (h / 6.0) * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
         let dv = (h / 6.0) * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
-        let mid = x + 0.5 * dx;
+        // Sample the volume at a random point along the step, not its middle:
+        // neighbouring pixels take near-identical steps, and fixed sample
+        // points lined up into contour ripples across grazing gas.
+        let mid = x + rand() * dx;
         let seg = length(dx);
         x += dx;
         v += dv;
