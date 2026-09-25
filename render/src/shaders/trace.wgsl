@@ -248,7 +248,7 @@ fn disk_sample(
 
 // Accretion stream: gas torn from the cavity edge spirals in to the hole,
 // trailing behind it. Distance to a short polyline, Gaussian falloff.
-fn stream_density(x: vec3<f32>, hole: vec3<f32>, cavity: f32, seed: f32) -> f32 {
+fn stream_density(x: vec3<f32>, hole: vec3<f32>, mini_outer: f32, cavity: f32, seed: f32) -> f32 {
     if (abs(x.y) > 2.5) { return 0.0; }
     let rho_h = length(hole.xz);
     let rho_x = length(x.xz);
@@ -273,10 +273,14 @@ fn stream_density(x: vec3<f32>, hole: vec3<f32>, cavity: f32, seed: f32) -> f32 
     let width = 0.15 + 0.35 * best_s;
     let along = fbm(x * 1.6 + vec3<f32>(seed, P.misc.x * 0.5, 0.0), 3);
     let taper = smoothstep(0.0, 0.08, best_s) * (1.0 - smoothstep(0.85, 1.0, best_s));
-    return exp(-(best * best) / (width * width)) * (0.6 + 0.4 * along) * taper;
+    // The stream feeds the mini-disk's rim and hands over to it there. Carried
+    // on to the hole, it met the horizon at full strength and rays that ended
+    // there cut it off in hard-edged boxes.
+    let feed = smoothstep(0.7 * mini_outer, 1.1 * mini_outer, length(x - hole));
+    return exp(-(best * best) / (width * width)) * (0.6 + 0.4 * along) * taper * feed;
 }
 
-// Soft corona above a disk: scattered light with a tall, smooth profile.
+// Soft corona above a disk: scattered light in a smooth layer hugging it.
 // Gives the disks depth without the cost of more turbulence.
 fn corona(x: vec3<f32>, center: vec3<f32>, normal: vec3<f32>, inner: f32, outer: f32, gain: f32, temp: f32) -> vec3<f32> {
     if (gain <= 0.0) { return vec3<f32>(0.0); }
@@ -284,8 +288,10 @@ fn corona(x: vec3<f32>, center: vec3<f32>, normal: vec3<f32>, inner: f32, outer:
     let z = abs(dot(rel, normal));
     let r = length(rel - dot(rel, normal) * normal);
     if (r < inner * 0.7 || r > outer * 1.3) { return vec3<f32>(0.0); }
-    let height = 0.07 * r + 0.03;
-    let vertical = exp(-z / height);
+    // Gaussian, so it has faded to nothing long before the march cares where
+    // it ends. An exponential this tall was clipped mid-glow at the disk slab.
+    let height = 0.025 * r + 0.03;
+    let vertical = exp(-(z * z) / (height * height));
     let radial = pow(inner / max(r, inner), 2.2) * smoothstep(inner * 0.7, inner * 1.1, r) * (1.0 - smoothstep(outer * 0.9, outer * 1.3, r));
     return bb_color(temp * 0.9) * vertical * radial * gain * 0.008;
 }
@@ -306,7 +312,7 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
         total.density += s.density;
         total.emission += corona(x, b.pos_rs.xyz, b.normal.xyz, b.disk.x, b.disk.y, b.disk.z, b.disk.w);
         if (b.disk.z > 0.0 && P.gw2.w > 0.0) {
-            let st = stream_density(x, b.pos_rs.xyz, P.big.x, f32(i) * 3.1) * P.gw2.w * b.disk.z;
+            let st = stream_density(x, b.pos_rs.xyz, b.disk.y, P.big.x, f32(i) * 3.1) * P.gw2.w * b.disk.z;
             total.emission += bb_color(6200.0) * st * 0.15;
             total.density += st * 0.15;
         }
@@ -320,11 +326,11 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
     total.emission += big.emission;
     total.density += big.density;
     total.emission += corona(x, vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), P.big.x, P.big.y, P.big.z, P.big.w);
-    // Merger flash: a hot core in the first moments.
+    // Merger flash: the shock lights the gas near the core in the first
+    // moments. Weighted by density so empty space stays dark.
     let flash = P.gw2.z;
-    let rc = length(x);
     if (flash > 0.0) {
-        total.emission += bb_color(7500.0) * exp(-rc / 3.5) * 0.4 * flash;
+        total.emission += bb_color(7500.0) * exp(-length(x) / 3.5) * 2.0 * flash * total.density;
     }
     return total;
 }
@@ -469,8 +475,11 @@ fn trace(origin: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
         v += dv;
 
         let s = sample_volume(mid, v);
+        // Corona and flash glow where there is no gas to absorb. Gating the
+        // emission on density clipped them to the disk slabs, and lensing drew
+        // those clips as hard-edged boxes.
+        col += transmit * s.emission * seg;
         if (s.density > 0.0) {
-            col += transmit * s.emission * seg;
             transmit *= exp(-ABSORB * s.density * seg);
             if (transmit < 0.005) { return col; }
         }

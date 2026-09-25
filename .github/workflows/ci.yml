@@ -30,6 +30,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - run: cd web && pnpm install --frozen-lockfile
+      # The trace tests run the real shader; lavapipe gives wgpu a software GPU.
+      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
       - run: scripts/task check
 
   required:
