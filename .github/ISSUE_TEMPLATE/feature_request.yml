@@ -1,0 +1,16 @@
+name: Feature request
+description: An idea for the renderer, the film or the site.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is missing or could be better.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: What you would change.
