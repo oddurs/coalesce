@@ -6,8 +6,8 @@
 //! scaled for the eye, see [`orbital_rate`].
 
 pub const FPS: f32 = 24.0;
-pub const LOOP_SECONDS: f32 = 60.0;
-pub const LOOP_FRAMES: u32 = 1440;
+pub const LOOP_SECONDS: f32 = 75.0;
+pub const LOOP_FRAMES: u32 = 1800;
 /// Shutter open time: 180 degrees, half a frame, as film is shot.
 pub const SHUTTER: f32 = 0.5 / FPS;
 
@@ -24,19 +24,15 @@ pub const T_COALESCE: f32 = 48.0;
 /// The loop closes here. The camera runs on loop time, so it is the same on
 /// both sides by construction; around the cut it has tilted up and away to
 /// the sky, and a dissolve swaps the remnant for the binary out of frame.
-pub const T_CUT: f32 = 59.4;
+pub const T_CUT: f32 = 73.6;
 /// Half-width of the dissolve, in seconds.
-pub const DISSOLVE: f32 = 0.5;
+pub const DISSOLVE: f32 = 1.0;
 /// Exposure at rest, shared by both sides of the seam so the grade cannot pop.
 pub const EXPOSURE_REST: f32 = 0.72;
 /// The opening binary carries the remnant's mass until this physical time and
 /// grows to full mass by then, out of frame. Across the dissolve both sides
 /// then bend starlight alike; a 5% mass step doubled every star in the mix.
 pub const SEAM_MASS_END: f32 = 0.8;
-/// The last orbit plays in slow motion: loop time loses this much physical
-/// time across the window ending at coalescence.
-pub const SLOW_MOTION: f32 = 0.6;
-pub const SLOW_MOTION_START: f32 = 46.4;
 
 pub const RINGDOWN_AMPLITUDE: f32 = 3.0;
 pub const RINGDOWN_OMEGA: f32 = 4.6;
@@ -51,7 +47,7 @@ pub const GW_AMPLITUDE: f32 = 0.55;
 /// The strain table covers this window at this step.
 pub const GW_T0: f32 = -14.0;
 pub const GW_DT: f32 = 1.0 / 48.0;
-pub const GW_LEN: usize = 3700;
+pub const GW_LEN: usize = 4300;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Body {
@@ -116,18 +112,49 @@ pub fn shutter_times(t: f32, n: u32) -> Vec<f32> {
         .collect()
 }
 
+/// How fast physical time runs at loop time `t`. Real time through the
+/// dance; the last orbit slows, the merger and its flash play at a third of
+/// real speed so the blast unfolds, the ringdown eases back, and the pull
+/// back to the sky runs in real time again.
+pub fn playback_rate(t: f32) -> f32 {
+    let mix = |a: f32, b: f32, k: f32| a + (b - a) * k;
+    let mut r = 1.0;
+    r = mix(r, 0.7, smoothstep(46.0, 47.6, t));
+    r = mix(r, 0.3, smoothstep(47.8, 48.4, t));
+    r = mix(r, 0.65, smoothstep(52.5, 55.5, t));
+    mix(r, 1.0, smoothstep(58.0, 62.0, t))
+}
+
+const WARP_DT: f32 = 1.0 / 480.0;
+
+/// Physical time at each step of loop time: the playback rate, integrated.
+fn warp() -> &'static [f32] {
+    static TABLE: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let n = (LOOP_SECONDS / WARP_DT) as usize + 2;
+        // Summed in f64: twenty thousand f32 steps drift by a millisecond.
+        let mut tau = 0.0f64;
+        (0..n)
+            .map(|i| {
+                let at = tau as f32;
+                tau += (playback_rate((i as f32 + 0.5) * WARP_DT) * WARP_DT) as f64;
+                at
+            })
+            .collect()
+    })
+}
+
 /// Loop time to physical time. The cut happens at `T_CUT`; after it the
 /// opening is playing at negative physical time.
 pub fn physical_time(t: f32) -> f32 {
     let t = t.rem_euclid(LOOP_SECONDS);
-    if t < T_CUT {
-        // Slow motion across the last orbit: physical time falls behind loop
-        // time by SLOW_MOTION, smoothly, so coalescence lands a little later.
-        let window_end = T_COALESCE + SLOW_MOTION;
-        t - SLOW_MOTION * smoothstep(SLOW_MOTION_START, window_end, t)
-    } else {
-        t - LOOP_SECONDS
+    if t >= T_CUT {
+        return t - LOOP_SECONDS;
     }
+    let table = warp();
+    let f = t / WARP_DT;
+    let i = (f as usize).min(table.len() - 2);
+    table[i] + (table[i + 1] - table[i]) * (f - i as f32)
 }
 
 /// Separation of the two bodies. Peters inspiral before coalescence, a damped
@@ -278,23 +305,29 @@ pub fn gw_table() -> Vec<[f32; 4]> {
 /// one full turn round, so the path is periodic. Tilt lifts the view off the
 /// system toward the sky: the loop closes looking up and away, and opens by
 /// tilting back down onto the binary.
-const CAMERA_KEYS: [[f32; 7]; 16] = [
-    [0.0, 170.0, 14.0, 0.0, 32.0, 0.0, 28.0],
-    [0.9, 165.0, 14.0, 4.5, 32.0, 0.0, 22.0],
-    [2.4, 150.0, 13.5, 12.0, 32.0, 0.0, 5.0],
-    [5.0, 126.0, 12.5, 25.0, 32.5, 0.0, 0.0],
-    [7.5, 108.0, 12.0, 34.0, 33.0, 0.0, 0.0],
-    [12.0, 88.0, 10.0, 47.0, 34.0, 0.0, 0.0],
-    [22.0, 58.0, 4.5, 78.0, 35.0, 0.0, 0.0],
-    [34.0, 43.0, 1.2, 132.0, 37.0, 2.0, 0.0],
-    [42.0, 34.0, 3.0, 186.0, 39.0, 5.0, 0.0],
-    [46.5, 30.0, 7.0, 222.0, 41.0, 8.0, 0.0],
-    [48.6, 28.0, 12.0, 244.0, 42.0, 9.0, 0.0],
-    [52.0, 27.0, 16.0, 272.0, 40.0, 6.0, 0.0],
-    [55.0, 72.0, 16.0, 303.0, 36.0, 2.0, 3.0],
-    [57.4, 140.0, 15.0, 336.0, 33.0, 0.5, 10.0],
-    [58.6, 162.0, 14.0, 351.0, 32.0, 0.0, 25.0],
-    [60.0, 170.0, 14.0, 360.0, 32.0, 0.0, 28.0],
+const CAMERA_KEYS: [[f32; 7]; 22] = [
+    [0.0, 170.0, 14.0, 0.0, 32.0, 0.0, 25.0],
+    [1.2, 169.0, 14.0, 5.0, 32.0, 0.0, 22.0],
+    [2.8, 162.0, 13.9, 11.5, 32.0, 0.0, 12.0],
+    [4.6, 148.0, 13.5, 19.0, 32.0, 0.0, 3.0],
+    [6.5, 132.0, 12.8, 27.0, 32.3, 0.0, 0.0],
+    [10.0, 110.0, 12.0, 41.0, 33.0, 0.0, 0.0],
+    [14.0, 88.0, 10.0, 57.0, 34.0, 0.0, 0.0],
+    [22.0, 58.0, 4.5, 88.0, 35.0, 0.0, 0.0],
+    [34.0, 43.0, 1.2, 158.0, 37.0, 2.0, 0.0],
+    [42.0, 34.0, 3.0, 205.0, 39.0, 5.0, 0.0],
+    [46.5, 30.0, 7.0, 231.5, 41.0, 8.0, 0.0],
+    [49.0, 28.0, 12.0, 246.5, 42.0, 9.0, 0.0],
+    [52.0, 27.0, 15.5, 258.5, 40.5, 7.0, 0.0],
+    [56.0, 26.0, 17.0, 274.5, 39.0, 4.5, 0.0],
+    [59.0, 31.0, 16.5, 288.0, 37.5, 2.5, 0.0],
+    [63.0, 72.0, 15.5, 306.0, 35.0, 1.0, 0.0],
+    [67.0, 125.0, 15.0, 324.0, 33.0, 0.4, 2.0],
+    [69.5, 150.0, 14.6, 335.0, 32.3, 0.1, 9.0],
+    [71.2, 162.0, 14.3, 343.0, 32.0, 0.0, 19.0],
+    [72.6, 167.0, 14.1, 349.5, 32.0, 0.0, 24.0],
+    [74.0, 169.0, 14.0, 355.0, 32.0, 0.0, 25.0],
+    [75.0, 170.0, 14.0, 360.0, 32.0, 0.0, 25.0],
 ];
 
 /// Key `i`, extended periodically past both ends.
@@ -539,19 +572,32 @@ mod tests {
         assert_eq!(shutter_times(10.0, 1), vec![10.0]);
     }
 
+    /// Loop time at which physical time first reaches `tau`.
+    fn loop_time_of(tau: f32) -> f32 {
+        let mut t = 0.0;
+        while physical_time(t) < tau {
+            t += 1.0 / 480.0;
+        }
+        t
+    }
+
     #[test]
-    fn slow_motion_holds_the_last_orbit() {
-        // Physical time never runs backwards and never below half speed.
+    fn slow_motion_holds_the_merger() {
+        // Physical time never runs backwards and never below a quarter speed.
         let mut prev = physical_time(0.0);
         for n in 1..(T_CUT * FPS) as u32 {
             let tau = physical_time(n as f32 / FPS);
             let rate = (tau - prev) * FPS;
-            assert!(rate > 0.35 && rate <= 1.001, "frame {n} rate {rate}");
+            assert!(rate > 0.25 && rate <= 1.001, "frame {n} rate {rate}");
             prev = tau;
         }
-        // Coalescence lands later in loop time than in physical time.
-        assert!(physical_time(T_COALESCE + SLOW_MOTION) - T_COALESCE < 1e-3);
-        assert!(physical_time(T_COALESCE) < T_COALESCE);
+        // The dance runs in real time; the flash plays over several seconds.
+        assert!((physical_time(40.0) - 40.0).abs() < 1e-3);
+        let merge = loop_time_of(T_COALESCE);
+        let cooled = loop_time_of(T_COALESCE + 1.5);
+        assert!(cooled - merge > 4.0, "flash spans {} s", cooled - merge);
+        // The ringdown has settled long before the loop closes.
+        assert!(physical_time(T_CUT - DISSOLVE) > T_COALESCE + 15.0);
     }
 
     #[test]
