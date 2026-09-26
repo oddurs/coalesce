@@ -19,14 +19,18 @@ pub const MERGER_LOSS: f32 = 0.05;
 pub const D0: f32 = 12.0;
 /// Coalescence time of the Peters inspiral, in loop seconds.
 pub const T_COALESCE: f32 = 48.0;
-/// The loop closes here, at the far point of the camera's excursion: the
-/// ending and opening cameras share pose, drift and sky, and the system is a
-/// speck. A short dissolve hides the speck changing from remnant to binary.
-pub const T_CUT: f32 = 58.5;
+/// The loop closes here. The camera runs on loop time, so it is the same on
+/// both sides by construction; around the cut it has tilted up and away to
+/// the sky, and a dissolve swaps the remnant for the binary out of frame.
+pub const T_CUT: f32 = 59.4;
 /// Half-width of the dissolve, in seconds.
-pub const DISSOLVE: f32 = 1.0;
-/// Distance of the far point.
-pub const FAR: f32 = 2600.0;
+pub const DISSOLVE: f32 = 0.5;
+/// Exposure at rest, shared by both sides of the seam so the grade cannot pop.
+pub const EXPOSURE_REST: f32 = 0.72;
+/// The opening binary carries the remnant's mass until this physical time and
+/// grows to full mass by then, out of frame. Across the dissolve both sides
+/// then bend starlight alike; a 5% mass step doubled every star in the mix.
+pub const SEAM_MASS_END: f32 = 0.8;
 /// The last orbit plays in slow motion: loop time loses this much physical
 /// time across the window ending at coalescence.
 pub const SLOW_MOTION: f32 = 0.6;
@@ -197,9 +201,14 @@ pub fn shake(tau: f32) -> [f32; 3] {
 /// Exposure arc: a dark overture, a build through the dance, the flash, then
 /// the calm and the fall.
 pub fn exposure(tau: f32) -> f32 {
-    let build = 0.72 + 0.28 * smoothstep(6.0, 34.0, tau) + 0.15 * smoothstep(38.0, 47.5, tau);
-    let settle = 1.0 - 0.3 * smoothstep(48.5, 53.0, tau);
-    let fall = 1.0 - 0.15 * smoothstep(55.0, 58.0, tau);
+    const PEAK: f32 = 1.15;
+    const SETTLE: f32 = 0.7;
+    let build = EXPOSURE_REST
+        + (1.0 - EXPOSURE_REST) * smoothstep(6.0, 34.0, tau)
+        + (PEAK - 1.0) * smoothstep(38.0, 47.5, tau);
+    let settle = 1.0 - (1.0 - SETTLE) * smoothstep(48.5, 53.0, tau);
+    // Lands exactly on the rest value before the seam window opens.
+    let fall = 1.0 - (1.0 - EXPOSURE_REST / (PEAK * SETTLE)) * smoothstep(53.5, 56.5, tau);
     build * settle * fall
 }
 
@@ -254,63 +263,66 @@ pub fn gw_table() -> Vec<[f32; 4]> {
     rows
 }
 
-/// Camera keyframes: (tau, distance, elevation deg, azimuth deg, fov deg, roll deg).
-/// Distances step down roughly geometrically so the approach eases in on its
-/// own; the plunge at the end is the one fast move.
-const CAMERA_KEYS: [[f32; 6]; 18] = [
-    [-6.0, FAR, 12.0, -21.5, 32.0, 0.0],
-    [-1.5, FAR, 12.0, -8.0, 32.0, 0.0],
-    [0.0, FAR, 12.0, -3.5, 32.0, 0.0],
-    [3.0, 1200.0, 11.5, 5.5, 32.0, 0.0],
-    [7.0, 220.0, 10.0, 12.0, 33.0, 0.0],
-    [12.0, 95.0, 8.5, 26.0, 34.0, 0.0],
-    [22.0, 58.0, 6.5, 60.0, 35.0, 0.0],
-    [34.0, 43.0, 6.5, 120.0, 37.0, 2.0],
-    [42.0, 34.0, 7.0, 180.0, 39.0, 5.0],
-    [46.5, 30.0, 9.0, 222.0, 41.0, 8.0],
-    [48.6, 28.0, 12.0, 244.0, 42.0, 9.0],
-    [52.0, 27.0, 16.0, 270.0, 40.0, 6.0],
-    [54.0, 55.0, 13.0, 300.0, 38.0, 3.0],
-    [56.0, 400.0, 12.0, 330.0, 34.0, 1.0],
-    [57.0, 2000.0, 12.0, 347.5, 32.0, 0.0],
-    [57.5, FAR, 12.0, 349.0, 32.0, 0.0],
-    [58.5, FAR, 12.0, 352.0, 32.0, 0.0],
-    [61.0, FAR, 12.0, 359.5, 32.0, 0.0],
+/// Camera keyframes on loop time: (t, distance, elevation deg, azimuth deg,
+/// fov deg, roll deg, tilt deg). The last key is the first one a loop later,
+/// one full turn round, so the path is periodic. Tilt lifts the view off the
+/// system toward the sky: the loop closes looking up and away, and opens by
+/// tilting back down onto the binary.
+const CAMERA_KEYS: [[f32; 7]; 16] = [
+    [0.0, 170.0, 14.0, 0.0, 32.0, 0.0, 28.0],
+    [0.9, 165.0, 14.0, 5.5, 32.0, 0.0, 22.0],
+    [2.4, 150.0, 13.5, 13.5, 32.0, 0.0, 5.0],
+    [5.0, 126.0, 12.5, 25.0, 32.5, 0.0, 0.0],
+    [7.5, 108.0, 12.0, 34.0, 33.0, 0.0, 0.0],
+    [12.0, 88.0, 10.0, 47.0, 34.0, 0.0, 0.0],
+    [22.0, 58.0, 7.0, 78.0, 35.0, 0.0, 0.0],
+    [34.0, 43.0, 6.5, 132.0, 37.0, 2.0, 0.0],
+    [42.0, 34.0, 7.0, 186.0, 39.0, 5.0, 0.0],
+    [46.5, 30.0, 9.0, 222.0, 41.0, 8.0, 0.0],
+    [48.6, 28.0, 12.0, 244.0, 42.0, 9.0, 0.0],
+    [52.0, 27.0, 16.0, 272.0, 40.0, 6.0, 0.0],
+    [55.0, 72.0, 16.0, 303.0, 36.0, 2.0, 3.0],
+    [57.4, 140.0, 15.0, 334.0, 33.0, 0.5, 10.0],
+    [58.6, 162.0, 14.0, 348.0, 32.0, 0.0, 25.0],
+    [60.0, 170.0, 14.0, 360.0, 32.0, 0.0, 28.0],
 ];
 
-/// Cubic Hermite with finite-difference tangents in real time, so unevenly
-/// spaced keys do not overshoot.
-fn camera_key(tau: f32) -> [f32; 5] {
-    let n = CAMERA_KEYS.len();
-    let tau = tau.clamp(CAMERA_KEYS[0][0], CAMERA_KEYS[n - 1][0]);
+/// Key `i`, extended periodically past both ends.
+fn key(i: isize) -> [f32; 7] {
+    let n = CAMERA_KEYS.len() as isize - 1;
+    let laps = i.div_euclid(n);
+    let mut k = CAMERA_KEYS[i.rem_euclid(n) as usize];
+    k[0] += laps as f32 * LOOP_SECONDS;
+    k[3] += laps as f32 * 360.0;
+    k
+}
+
+/// Periodic cubic Hermite with finite-difference tangents in real time, so
+/// unevenly spaced keys do not overshoot and the seam is as smooth as any
+/// other instant.
+fn camera_key(t: f32) -> [f32; 6] {
+    let t = t.rem_euclid(LOOP_SECONDS);
     let mut i = 0;
-    while i + 2 < n && CAMERA_KEYS[i + 1][0] <= tau {
+    while CAMERA_KEYS[i + 1][0] <= t {
         i += 1;
     }
-    let (k1, k2) = (CAMERA_KEYS[i], CAMERA_KEYS[i + 1]);
+    let i = i as isize;
+    let (k1, k2) = (key(i), key(i + 1));
     let dt = k2[0] - k1[0];
-    let s = ((tau - k1[0]) / dt).clamp(0.0, 1.0);
-    let slope = |a: [f32; 6], b: [f32; 6], j: usize| (b[j] - a[j]) / (b[0] - a[0]);
+    let s = ((t - k1[0]) / dt).clamp(0.0, 1.0);
+    let slope = |a: [f32; 7], b: [f32; 7], j: usize| (b[j] - a[j]) / (b[0] - a[0]);
     // Fritsch-Carlson limiting: flat where the slope changes sign, and never
     // more than three times the gentler neighbour.
-    let tangent = |idx: usize, j: usize| {
-        let here = CAMERA_KEYS[idx];
-        match (
-            idx.checked_sub(1).map(|p| CAMERA_KEYS[p]),
-            CAMERA_KEYS.get(idx + 1),
-        ) {
-            (Some(prev), Some(next)) => {
-                let (a, b) = (slope(prev, here, j), slope(here, *next, j));
-                if a * b <= 0.0 {
-                    0.0
-                } else {
-                    let avg = 0.5 * (a + b);
-                    avg.signum() * avg.abs().min(3.0 * a.abs().min(b.abs()))
-                }
-            }
-            (None, Some(next)) => slope(here, *next, j),
-            (Some(prev), None) => slope(prev, here, j),
-            (None, None) => 0.0,
+    let tangent = |idx: isize, j: usize| {
+        let (a, b) = (
+            slope(key(idx - 1), key(idx), j),
+            slope(key(idx), key(idx + 1), j),
+        );
+        if a * b <= 0.0 {
+            0.0
+        } else {
+            let avg = 0.5 * (a + b);
+            avg.signum() * avg.abs().min(3.0 * a.abs().min(b.abs()))
         }
     };
     let (h00, h10, h01, h11) = (
@@ -319,7 +331,7 @@ fn camera_key(tau: f32) -> [f32; 5] {
         -2.0 * s * s * s + 3.0 * s * s,
         s * s * s - s * s,
     );
-    let mut out = [0.0; 5];
+    let mut out = [0.0; 6];
     for (j, o) in out.iter_mut().enumerate() {
         let (m1, m2) = (tangent(i, j + 1) * dt, tangent(i + 1, j + 1) * dt);
         *o = h00 * k1[j + 1] + h10 * m1 + h01 * k2[j + 1] + h11 * m2;
@@ -329,30 +341,57 @@ fn camera_key(tau: f32) -> [f32; 5] {
 
 /// Organic drift, a few slow sines. Scaled with distance so it stays a
 /// fraction of a degree on screen, and grows a little as the dance tightens.
-pub fn sway(tau: f32, dist: f32) -> [f32; 3] {
-    let gate = smoothstep(2.0, 6.0, tau) * (1.0 - smoothstep(52.0, 56.0, tau));
-    let a = 0.012 * dist * (1.0 + 0.6 * smoothstep(30.0, 47.0, tau)) * gate;
+pub fn sway(t: f32, dist: f32) -> [f32; 3] {
+    let gate = smoothstep(2.0, 6.0, t) * (1.0 - smoothstep(52.0, 56.0, t));
+    let a = 0.012 * dist * (1.0 + 0.6 * smoothstep(30.0, 47.0, t)) * gate;
     [
-        a * ((0.37 * tau + 1.0).sin() + 0.5 * (0.91 * tau).sin()),
-        a * 0.6 * ((0.29 * tau).sin() + 0.5 * (0.73 * tau + 2.0).sin()),
-        a * ((0.41 * tau + 2.0).sin() + 0.5 * (0.83 * tau + 1.0).sin()),
+        a * ((0.37 * t + 1.0).sin() + 0.5 * (0.91 * t).sin()),
+        a * 0.6 * ((0.29 * t).sin() + 0.5 * (0.73 * t + 2.0).sin()),
+        a * ((0.41 * t + 2.0).sin() + 0.5 * (0.83 * t + 1.0).sin()),
     ]
 }
 
-pub fn camera(tau: f32) -> Camera {
-    let [dist, elev, azim, fov, roll] = camera_key(tau);
+pub fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-9);
+    [v[0] / l, v[1] / l, v[2] / l]
+}
+
+pub fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// Where the camera looks at the system from.
+pub const TARGET: [f32; 3] = [0.0, 0.4, 0.0];
+
+/// Camera at loop time `t`. The path runs on loop time so it is periodic; only
+/// the merger jolt follows physical time `tau`.
+pub fn camera(t: f32, tau: f32) -> Camera {
+    let [dist, elev, azim, fov, roll, tilt] = camera_key(t);
+    let t = t.rem_euclid(LOOP_SECONDS);
     let (el, az) = (elev.to_radians(), azim.to_radians());
     let jolt = shake(tau);
-    let drift = sway(tau, dist);
+    let drift = sway(t, dist);
     let pos = [
         dist * el.cos() * az.sin() + jolt[0] + drift[0],
         dist * el.sin() + jolt[1] + drift[1],
         dist * el.cos() * az.cos() + jolt[2] + drift[2],
     ];
+    // Tilt the view up off the system, about the camera's own right axis. The
+    // up vector tilts with it, so looking near the zenith stays well defined.
+    let fwd0 = normalize([TARGET[0] - pos[0], TARGET[1] - pos[1], TARGET[2] - pos[2]]);
+    let right = normalize(cross(fwd0, [0.0, 1.0, 0.0]));
+    let up0 = cross(right, fwd0);
+    let (st, ct) = tilt.to_radians().sin_cos();
+    let fwd = [0, 1, 2].map(|k| fwd0[k] * ct + up0[k] * st);
+    let up = [0, 1, 2].map(|k| up0[k] * ct - fwd0[k] * st);
     Camera {
         pos,
-        look_at: [0.0, 0.4, 0.0],
-        up: [0.0, 1.0, 0.0],
+        look_at: [pos[0] + fwd[0], pos[1] + fwd[1], pos[2] + fwd[2]],
+        up,
         roll_deg: roll,
         fov_x_deg: fov,
         aperture: 0.0,
@@ -391,7 +430,8 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
         let m = 1.0 - MERGER_LOSS;
         [m * M1, m * M2]
     } else {
-        [M1, M2]
+        let m = 1.0 - MERGER_LOSS * (1.0 - smoothstep(0.0, SEAM_MASS_END, tau));
+        [m * M1, m * M2]
     };
     let offsets = [M2 * d, -M1 * d];
     let tilts = [0.12_f32, -0.16_f32];
@@ -453,7 +493,7 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
         circumbinary_inner,
         circumbinary_outer: 28.0,
         circumbinary_gain: 1.2,
-        camera: camera(tau),
+        camera: camera(t, tau),
         flash: flash(tau),
         exposure: exposure(tau),
         spiral_phase: phi,
@@ -504,37 +544,105 @@ mod tests {
         }
     }
 
+    fn angle_deg(a: [f32; 3], b: [f32; 3]) -> f32 {
+        let (a, b) = (normalize(a), normalize(b));
+        (a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
+            .clamp(-1.0, 1.0)
+            .acos()
+            .to_degrees()
+    }
+
+    fn velocity(t: f32) -> [f32; 3] {
+        let h = 1.0 / FPS;
+        let (a, b) = (camera(t - h, 0.0).pos, camera(t + h, 0.0).pos);
+        [0, 1, 2].map(|k| (b[k] - a[k]) / (2.0 * h))
+    }
+
     #[test]
-    fn camera_pose_matches_across_the_cut() {
-        // Same position, direction and drift on both sides of the seam, over
-        // the whole dissolve window, so only the speck differs.
-        let mut k = -DISSOLVE;
-        while k <= DISSOLVE {
-            let a = camera(T_CUT + k);
-            let b = camera(T_CUT + k - LOOP_SECONDS);
-            assert!(dist(a.pos, b.pos) < 0.05 * FAR / 100.0, "k={k} {a:?} {b:?}");
-            assert!((a.fov_x_deg - b.fov_x_deg).abs() < 1e-3);
-            assert!((a.roll_deg - b.roll_deg).abs() < 1e-3);
-            k += 0.125;
+    fn camera_is_periodic_and_smooth_across_the_wrap() {
+        let (a, b) = (camera(0.0, 0.0), camera(LOOP_SECONDS, 0.0));
+        assert!(dist(a.pos, b.pos) < 1e-3, "{a:?} {b:?}");
+        assert!(dist(a.look_at, b.look_at) < 1e-3);
+        // Velocity just before the wrap matches just after it: no kick.
+        let (v0, v1) = (velocity(LOOP_SECONDS - 0.01), velocity(0.01));
+        assert!(dist(v0, v1) < 0.02 * dist(v0, [0.0; 3]), "{v0:?} {v1:?}");
+    }
+
+    /// Angle in degrees by which the system's outer disk clears the frame;
+    /// negative when any of it is in view. Measured to the frame's edges.
+    fn clearance_deg(c: &Camera) -> f32 {
+        let fwd = normalize([0, 1, 2].map(|k| c.look_at[k] - c.pos[k]));
+        let right = normalize(cross(fwd, c.up));
+        let up = cross(right, fwd);
+        let tan_x = (c.fov_x_deg * 0.5).to_radians().tan();
+        let tan_y = tan_x * 2160.0 / 4096.0;
+        let to_system = [0, 1, 2].map(|k| TARGET[k] - c.pos[k]);
+        let disk = (32.0 / dist(c.pos, TARGET)).atan().to_degrees();
+        let mut nearest = f32::MAX;
+        for i in 0..=64 {
+            let u = i as f32 / 32.0 - 1.0;
+            for (x, y) in [(u, -1.0), (u, 1.0), (-1.0, u), (1.0, u)] {
+                let d = [0, 1, 2].map(|k| fwd[k] + right[k] * x * tan_x + up[k] * y * tan_y);
+                nearest = nearest.min(angle_deg(d, to_system));
+            }
         }
-        // The drift is the same speed on both sides: no kick at the seam.
-        let step = 1.0 / FPS;
-        let v_end = dist(camera(T_CUT).pos, camera(T_CUT + step).pos);
-        let v_start = dist(
-            camera(T_CUT - LOOP_SECONDS).pos,
-            camera(T_CUT - LOOP_SECONDS + step).pos,
-        );
-        assert!(
-            (v_end - v_start).abs() < 0.05 * v_end,
-            "seam speeds {v_end} vs {v_start}"
-        );
+        let inside = {
+            let z = to_system.iter().zip(fwd).map(|(a, b)| a * b).sum::<f32>();
+            let x = to_system.iter().zip(right).map(|(a, b)| a * b).sum::<f32>() / z;
+            let y = to_system.iter().zip(up).map(|(a, b)| a * b).sum::<f32>() / z;
+            z > 0.0 && x.abs() < tan_x && y.abs() < tan_y
+        };
+        if inside {
+            -nearest - disk
+        } else {
+            nearest - disk
+        }
+    }
+
+    #[test]
+    fn system_is_out_of_frame_through_the_dissolve() {
+        // The remnant turns back into the binary out of view: over the whole
+        // window the outer disk sits clear below the bottom of the frame.
+        let mut t = T_CUT - DISSOLVE;
+        while t <= T_CUT + DISSOLVE {
+            let margin = clearance_deg(&camera(t, 0.0));
+            assert!(margin > 4.0, "t={t} margin {margin} deg");
+            t += 0.05;
+        }
+    }
+
+    #[test]
+    fn both_sides_of_the_seam_weigh_the_same() {
+        let total = |f: Frame| f.bodies[0].mass + f.bodies[1].mass;
+        let mut t = T_CUT - DISSOLVE;
+        while t <= T_CUT + DISSOLVE {
+            let before = total(frame_at(t, t));
+            let after = total(frame_at(t, t - LOOP_SECONDS));
+            assert!((before - after).abs() < 1e-6, "t={t} {before} vs {after}");
+            t += 0.125;
+        }
+    }
+
+    #[test]
+    fn binary_is_at_full_mass_before_it_is_in_frame() {
+        let f = frame(SEAM_MASS_END);
+        assert!((f.bodies[0].mass + f.bodies[1].mass - 1.0).abs() < 1e-6);
+        assert!(clearance_deg(&f.camera) > 0.0);
+    }
+
+    #[test]
+    fn exposure_does_not_jump_at_the_cut() {
+        let e = |t: f32| exposure(physical_time(t));
+        assert!((e(T_CUT - 1e-3) - e(T_CUT + 1e-3)).abs() < 1e-4);
+        assert!((e(LOOP_SECONDS - 1e-3) - e(0.0)).abs() < 1e-4);
     }
 
     #[test]
     fn dissolve_is_confined_to_the_seam_window() {
         assert_eq!(dissolve(0.0), 0.0);
         assert_eq!(dissolve(T_CUT - DISSOLVE - 0.1), 0.0);
-        assert_eq!(dissolve(T_CUT + DISSOLVE + 0.1), 1.0);
+        // The window closes at the wrap; the opening takes over from there.
+        assert!(dissolve(T_CUT + DISSOLVE - 1e-3) > 0.999);
         assert!((dissolve(T_CUT) - 0.5).abs() < 1e-6);
     }
 
@@ -605,9 +713,8 @@ mod tests {
             let t = frame_time(n);
             let cam = frame(t).camera.pos;
             let step = dist(prev, cam);
-            let across_cut = n == (T_CUT * FPS) as u32;
             let jolting = (T_COALESCE..T_COALESCE + 3.5).contains(&t);
-            if !across_cut && !jolting {
+            if !jolting {
                 let limit = 0.6 + 0.15 * frame(t).camera.focus_distance;
                 assert!(step < limit, "frame {n} jumped {step}");
             }
