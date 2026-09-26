@@ -10,6 +10,9 @@
 		small
 	];
 	const IDLE_MS = 2500;
+	// The title and controls hold a little longer the first time, as the film
+	// fades up, like an opening card.
+	const INTRO_MS = 4000;
 
 	type IosVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
 
@@ -17,6 +20,8 @@
 	let video: IosVideo;
 	let src = $state('');
 	let paused = $state(true);
+	// Nothing shows until the film can play; then it fades up from black.
+	let ready = $state(false);
 	let idle = $state(false);
 	let fullscreen = $state(false);
 	let progress = $state(0);
@@ -39,7 +44,6 @@
 			if (video.duration) progress = video.currentTime / video.duration;
 			frame = requestAnimationFrame(tick);
 		});
-		wake();
 		return () => {
 			document.removeEventListener('fullscreenchange', onFullscreen);
 			cancelAnimationFrame(frame);
@@ -60,6 +64,8 @@
 			src = url;
 			return;
 		}
+		// No encode to play: show the poster rather than wait on black.
+		ready = true;
 	}
 
 	// Autoplay can be refused (Low Power Mode, browser policy). The video then
@@ -69,6 +75,7 @@
 			await video.play();
 		} catch {
 			paused = true;
+			ready = true;
 		}
 	}
 
@@ -80,11 +87,17 @@
 
 	// Controls show on any movement and fade after a still moment, taking the
 	// cursor with them; paused, they stay.
-	function wake() {
+	function wake(hold = IDLE_MS) {
 		idle = false;
 		clearTimeout(timer);
-		timer = setTimeout(() => (idle = true), IDLE_MS);
+		timer = setTimeout(() => (idle = true), hold);
 	}
+
+	// The idle clock starts when the picture arrives, not when the page does:
+	// on a slow load it would otherwise run out while still on black.
+	$effect(() => {
+		if (ready) wake(INTRO_MS);
+	});
 
 	// A tap on the picture shows the controls, or hides them if they are up.
 	function tap(event: MouseEvent) {
@@ -146,14 +159,14 @@
 		}
 	}
 
-	const shown = $derived(!idle || paused);
+	const shown = $derived(ready && (!idle || paused));
 </script>
 
 <svelte:head>
-	<title>Merger</title>
+	<title>Coalesce</title>
 	<meta
 		name="description"
-		content="Two black holes spiral together and become one. A sixty second loop."
+		content="Two black holes spiral together and become one. A seventy-five second loop by Oddur Sigurdsson."
 	/>
 	<meta name="theme-color" content="#000000" />
 </svelte:head>
@@ -170,6 +183,7 @@
 >
 	<video
 		bind:this={video}
+		class:ready
 		{src}
 		autoplay
 		muted
@@ -179,8 +193,16 @@
 		poster="{base}/poster.jpg"
 		onloadeddata={play}
 		onplay={() => (paused = false)}
+		onplaying={() => (ready = true)}
 		onpause={() => (paused = true)}
 	></video>
+
+	<div class="loader" class:done={ready} aria-hidden="true"><span></span></div>
+
+	<p class="credit" class:shown>
+		Coalesce <span>·</span>
+		<a href="https://github.com/oddurs" rel="me">Oddur Sigurdsson</a>
+	</p>
 
 	<p class="turn" aria-hidden="true">
 		<svg viewBox="0 0 24 24" width="28" height="28">
@@ -259,6 +281,81 @@
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
+		opacity: 0;
+		transition: opacity 1.6s ease;
+	}
+	video.ready {
+		opacity: 1;
+	}
+
+	/* While the film loads: one breathing point of light, then it fades away
+	   as the picture fades up. */
+	.loader {
+		position: absolute;
+		inset: 0;
+		display: grid;
+		place-items: center;
+		pointer-events: none;
+		transition: opacity 0.6s ease;
+	}
+	.loader.done {
+		opacity: 0;
+	}
+	.loader span {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: rgba(255, 255, 255, 0.8);
+		box-shadow: 0 0 14px rgba(255, 255, 255, 0.35);
+		animation: breathe 1.8s ease-in-out infinite;
+	}
+	@keyframes breathe {
+		0%,
+		100% {
+			transform: scale(0.7);
+			opacity: 0.3;
+		}
+		50% {
+			transform: scale(1.15);
+			opacity: 0.9;
+		}
+	}
+
+	/* The title and credit ride with the controls: there when you reach for
+	   them, gone while you watch. */
+	.credit {
+		position: absolute;
+		top: max(1.25rem, env(safe-area-inset-top));
+		left: max(1.5rem, env(safe-area-inset-left));
+		margin: 0;
+		font-size: 0.8rem;
+		letter-spacing: 0.03em;
+		color: rgba(255, 255, 255, 0.85);
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 0.35s ease;
+	}
+	.credit.shown {
+		opacity: 1;
+		pointer-events: auto;
+	}
+	.credit span {
+		margin: 0 0.3em;
+		color: rgba(255, 255, 255, 0.4);
+	}
+	.credit a {
+		color: rgba(255, 255, 255, 0.55);
+		text-decoration: none;
+		transition: color 0.2s ease;
+	}
+	.credit a:hover,
+	.credit a:focus-visible {
+		color: #fff;
+	}
+	.credit a:focus-visible {
+		outline: 2px solid rgba(255, 255, 255, 0.8);
+		outline-offset: 3px;
+		border-radius: 2px;
 	}
 
 	.controls {
@@ -406,8 +503,13 @@
 		}
 		video,
 		.controls,
+		.loader,
 		.turn {
 			display: none;
+		}
+		.credit {
+			opacity: 1;
+			pointer-events: auto;
 		}
 	}
 </style>
