@@ -34,3 +34,13 @@ served as a fullscreen video by a SvelteKit site.
 - Look-dev at 1920x1010 with low samples (`scripts/render --preview --t <s>`). Final at 4096x2160.
 - A look change alone is `render post` over the EXRs; only physics or geometry changes need a retrace.
 - Check stills at 1:1 at 4K before trusting a look; previews hid disk aliasing and bokeh noise.
+
+## Deploying
+
+- The site is a static build (`adapter-static`, one prerendered page) and ships with its video.
+- `scripts/encode <frames-dir> <out-dir>` writes the master and the web set: `loop-av1.mp4`,
+  `loop-hevc.mp4`, `loop-720.mp4`, `poster.jpg`, `hero.jpg`. Copy the web set into `web/static/video`.
+- Deploy from `web/` with the Vercel CLI: `vercel deploy` (preview) or `vercel deploy --prod`. The CLI
+  uploads the gitignored video; a Git-connected build would not have it. Keep the upload under Vercel
+  Hobby's 100 MB: the 2K web set is about 81 MB.
+
