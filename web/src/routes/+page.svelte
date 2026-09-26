@@ -194,6 +194,7 @@
 		onloadeddata={play}
 		onplay={() => (paused = false)}
 		onplaying={() => (ready = true)}
+		onerror={() => (ready = true)}
 		onpause={() => (paused = true)}
 	></video>
 
