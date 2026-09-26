@@ -19,7 +19,7 @@ struct Pass {
     f: vec4<f32>,       // blur: dir.xy, radius, sigma | downsample: knee, threshold
     g: vec4<f32>,       // composite: exposure, unused, bloom, streak
     h: vec4<f32>,       // composite: halation, aberration, vignette, grain
-    k: vec4<f32>,       // composite: distortion, saturation, unused, unused
+    k: vec4<f32>,       // composite: distortion, saturation, flash, frame scale
     levels: array<vec4<u32>, 6>, // w, h, offset, 0 for each pyramid level
 };
 
@@ -124,9 +124,9 @@ fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
     return select(hi, lo, c <= vec3<f32>(0.0031308));
 }
 
-fn grain(p: vec2<u32>, frame: u32) -> f32 {
-    // Two-pixel clumps, new every frame, triangular distribution.
-    let q = vec2<f32>(p) * 0.5 + vec2<f32>(f32(frame) * 7.31, f32(frame) * 3.17);
+fn grain(p: vec2<u32>, frame: u32, clump: f32) -> f32 {
+    // Clumps of a fixed fraction of the frame, new every frame.
+    let q = vec2<f32>(p) / clump + vec2<f32>(f32(frame) * 7.31, f32(frame) * 3.17);
     let i = vec2<i32>(floor(q));
     let f = fract(q);
     let u = f * f * (3.0 - 2.0 * f);
@@ -173,6 +173,19 @@ fn composite(p: vec2<u32>) {
     }
     base /= wsum;
 
+    // Lens falloff: the glass softens a little toward the corners, the way
+    // real (and especially anamorphic) lenses do, keeping the eye centred.
+    let soft = smoothstep(0.3, 1.15, r2) * 0.55;
+    if (soft > 0.0) {
+        let o = 1.2 * U.k.w / vec2<f32>(U.src_size);
+        var blur = vec3<f32>(0.0);
+        for (var j = 0; j < 4; j++) {
+            let a = f32(j) * 1.5708 + 0.7854;
+            blur += bilinear(0u, 0u, U.src_size, uv + vec2<f32>(cos(a), sin(a)) * o);
+        }
+        base = mix(base, blur * 0.25, soft);
+    }
+
     // Bloom: sum of the pyramid, weighted to the finer levels. Glare hugs the
     // hot gas; weighting the widest levels laid a veil over the shadows.
     var bloom = vec3<f32>(0.0);
@@ -213,8 +226,19 @@ fn composite(p: vec2<u32>) {
     let lin = filmic(c);
 
     var out = srgb_encode(clamp(lin, vec3<f32>(0.0), vec3<f32>(1.0)));
-    let g = grain(p, U.frame) * U.h.w * (0.25 + 0.75 * (1.0 - luminance(out)));
-    out = clamp(out + g, vec3<f32>(0.0), vec3<f32>(1.0));
+    // Film grain lives in the midtones: a print's dense blacks and its
+    // clipped highlights hold almost none, so empty space stays clean rather
+    // than fizzing with digital noise. A little of it is colour grain.
+    let ol = luminance(out);
+    let amount = U.h.w * (0.15 + 3.4 * ol * (1.0 - ol));
+    let clump = 1.5 * U.k.w;
+    let mono = grain(p, U.frame, clump);
+    let chroma = vec3<f32>(
+        grain(p, U.frame + 101u, clump),
+        grain(p, U.frame + 211u, clump),
+        grain(p, U.frame + 307u, clump),
+    );
+    out = clamp(out + amount * (0.8 * mono + 0.35 * chroma), vec3<f32>(0.0), vec3<f32>(1.0));
     store(4u, 0u, U.dst_size, p, out);
 }
 
