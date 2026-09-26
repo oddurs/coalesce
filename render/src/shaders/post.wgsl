@@ -157,13 +157,21 @@ fn composite(p: vec2<u32>) {
     let r2_corner = 0.25 * aspect * aspect + 0.25;
     let distort = (1.0 + U.k.x * r2) / (1.0 + U.k.x * r2_corner);
     let uv = 0.5 + (uv0 - 0.5) * distort;
+    // Lateral aberration as a spectrum: seven taps from the inner to the outer
+    // offset, each channel weighted over the part of the spread its colour
+    // falls in. Three hard channel offsets split corner stars into separate
+    // red, green and blue copies.
     let ca = U.h.y * r2;
     let dir = uv - 0.5;
-    let base = vec3<f32>(
-        bilinear(0u, 0u, U.src_size, 0.5 + dir * (1.0 + ca)).r,
-        bilinear(0u, 0u, U.src_size, uv).g,
-        bilinear(0u, 0u, U.src_size, 0.5 + dir * (1.0 - ca)).b,
-    );
+    var base = vec3<f32>(0.0);
+    var wsum = vec3<f32>(0.0);
+    for (var k = 0; k < 7; k++) {
+        let s = f32(k) / 3.0 - 1.0;
+        let w = max(vec3<f32>(0.0), 1.0 - abs(vec3<f32>(s) - vec3<f32>(0.66, 0.0, -0.66)) / 0.9);
+        base += w * bilinear(0u, 0u, U.src_size, 0.5 + dir * (1.0 + ca * s));
+        wsum += w;
+    }
+    base /= wsum;
 
     // Bloom: sum of the pyramid, weighted to the finer levels. Glare hugs the
     // hot gas; weighting the widest levels laid a veil over the shadows.
