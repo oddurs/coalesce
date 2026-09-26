@@ -695,7 +695,12 @@ impl Post {
             mode: 2,
             g: [look.exposure * exposure, 0.0, look.bloom, look.streak],
             h: [look.halation, look.aberration, look.vignette, look.grain],
-            k: [look.distortion, look.saturation, flash, 0.0],
+            k: [
+                look.distortion,
+                look.saturation,
+                flash,
+                width as f32 / 1920.0,
+            ],
             levels: level_table,
             ..blank
         });
