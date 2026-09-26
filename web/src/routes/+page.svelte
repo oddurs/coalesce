@@ -1,23 +1,26 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { env } from '$env/dynamic/public';
 
-	// Encoded loops live outside the repo; the base URL points at wherever
-	// scripts/encode output was uploaded. Locally it is /video under static/.
-	const base = env.PUBLIC_VIDEO_BASE || '/video';
-	const candidates = [
-		['loop-4k-av1.mp4', 'video/mp4; codecs="av01.0.12M.10"'],
-		['loop-4k.mp4', 'video/mp4; codecs="hvc1.2.4.L153.B0"'],
-		['loop-1080.mp4', 'video/mp4; codecs="avc1.640028"']
+	// The web encodes from scripts/encode ship with the site under /video.
+	const base = '/video';
+	const small = ['loop-720.mp4', 'video/mp4; codecs="avc1.64001f"'];
+	const full = [
+		['loop-av1.mp4', 'video/mp4; codecs="av01.0.08M.10"'],
+		['loop-hevc.mp4', 'video/mp4; codecs="hvc1.2.4.L120.B0"'],
+		small
 	];
 
 	let video: HTMLVideoElement;
 	let src = $state('');
 	let blocked = $state(false);
 
-	// Pick the first encode the browser can decode and the server actually has,
-	// so a missing 4K file never leaves the page on its poster.
+	// Phones and Data Saver get the small encode: full 2K is wasted on a
+	// small screen and costs the most bandwidth. Otherwise pick the first
+	// encode the browser can decode and the server actually has.
 	onMount(async () => {
+		const saveData = (navigator as { connection?: { saveData?: boolean } }).connection
+			?.saveData;
+		const candidates = matchMedia('(max-width: 900px)').matches || saveData ? [small] : full;
 		for (const [file, type] of candidates) {
 			if (!video.canPlayType(type)) continue;
 			const url = `${base}/${file}`;
