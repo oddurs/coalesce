@@ -16,7 +16,7 @@ struct Pass {
     frame: u32,
     pad0: u32,
     pad1: u32,
-    f: vec4<f32>,       // blur: dir.xy, radius, sigma | downsample: knee
+    f: vec4<f32>,       // blur: dir.xy, radius, sigma | downsample: knee, threshold
     g: vec4<f32>,       // composite: exposure, unused, bloom, streak
     h: vec4<f32>,       // composite: halation, aberration, vignette, grain
     k: vec4<f32>,       // composite: distortion, saturation, unused, unused
@@ -85,6 +85,11 @@ fn downsample(p: vec2<u32>) {
         let l = luminance(c);
         let k = smoothstep(0.0, U.f.x, l);
         c *= k;
+    }
+    if (U.f.y > 0.0) {
+        // Hard threshold: only highlights far above the gas feed the streak.
+        let l = luminance(c);
+        c *= max(l - U.f.y, 0.0) / max(l, 1e-6);
     }
     store(U.dst_buf, U.dst_off, U.dst_size, p, c);
 }
@@ -160,9 +165,10 @@ fn composite(p: vec2<u32>) {
         bilinear(0u, 0u, U.src_size, 0.5 + dir * (1.0 - ca)).b,
     );
 
-    // Bloom: sum of the pyramid, lower levels weighted more for a wide glow.
+    // Bloom: sum of the pyramid, weighted to the finer levels. Glare hugs the
+    // hot gas; weighting the widest levels laid a veil over the shadows.
     var bloom = vec3<f32>(0.0);
-    let weights = array<f32, 6>(0.12, 0.16, 0.2, 0.22, 0.18, 0.12);
+    let weights = array<f32, 6>(0.24, 0.26, 0.22, 0.14, 0.09, 0.05);
     for (var l = 0; l < 6; l++) {
         let lv = U.levels[l];
         bloom += weights[l] * bilinear(1u, lv.z, lv.xy, uv);
@@ -171,7 +177,7 @@ fn composite(p: vec2<u32>) {
     let l1 = U.levels[1];
     let hal = bilinear(1u, l1.z, l1.xy, uv) * vec3<f32>(1.0, 0.32, 0.12);
     // Anamorphic streak from the streak buffer, cold blue.
-    let sl = U.levels[2];
+    let sl = U.levels[0];
     let st = bilinear(3u, 0u, sl.xy, uv) * vec3<f32>(0.75, 0.82, 1.08);
 
     var c = base + bloom * U.g.z + hal * U.h.x + st * U.g.w;
@@ -186,9 +192,12 @@ fn composite(p: vec2<u32>) {
 
     // Grade in scene-linear, a split tone: dim gas leans to embers, the hot
     // core stays cream. Multiplicative, so space stays black; a lifted teal
-    // shadow here turned the dim disk brown.
+    // shadow here turned the dim disk brown. Weighted by how warm the pixel
+    // already is, so white and blue stars stay a cool counterpoint.
     let lum = luminance(c);
-    c *= mix(vec3<f32>(1.14, 0.84, 0.62), vec3<f32>(1.04, 0.99, 0.92), smoothstep(0.02, 1.5, lum));
+    let warmth = smoothstep(0.05, 0.4, (c.r - c.b) / (c.r + c.b + 1e-4));
+    let tone = mix(vec3<f32>(1.14, 0.84, 0.62), vec3<f32>(1.04, 0.99, 0.92), smoothstep(0.02, 1.5, lum));
+    c *= mix(vec3<f32>(1.0), tone, warmth);
 
     // Saturation in scene-linear, before the curve bends it.
     let cl = luminance(c);

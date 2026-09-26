@@ -309,9 +309,13 @@ impl Tracer {
         }
     }
 
-    /// Render one frame. Returns premultiplied RGBA accumulation: rgb sums and
-    /// the sample count in alpha.
-    pub fn render(&mut self, gpu: &Gpu, frame: &Frame, q: &Quality) -> Result<Vec<f32>, String> {
+    /// Render one image. Sample `s` is traced through `frames[s % len]`, so
+    /// instants across the shutter give motion blur for free. Returns
+    /// premultiplied RGBA accumulation: rgb sums and the sample count in alpha.
+    pub fn render(&mut self, gpu: &Gpu, frames: &[Frame], q: &Quality) -> Result<Vec<f32>, String> {
+        if frames.is_empty() {
+            return Err("render needs at least one frame".into());
+        }
         let pixels = (q.width * q.height) as u64;
         let accum = storage_buffer(&gpu.device, "accum", pixels * 16);
         let tiles_x = q.width.div_ceil(TILE);
@@ -353,8 +357,8 @@ impl Tracer {
             ],
         });
 
-        let base = trace_params(frame, q);
         for sample in 0..q.spp {
+            let base = trace_params(&frames[sample as usize % frames.len()], q);
             // One submit per sample keeps each command buffer short.
             let mut staged = vec![0u8; (tiles * TRACE_STRIDE) as usize];
             for ty in 0..tiles_y {
@@ -421,6 +425,8 @@ pub struct Look {
     pub distortion: f32,
     pub saturation: f32,
     pub knee: f32,
+    /// Scene-linear luminance a highlight must exceed to feed the streak.
+    pub streak_threshold: f32,
 }
 
 impl Default for Look {
@@ -436,6 +442,7 @@ impl Default for Look {
             distortion: 0.04,
             saturation: 1.22,
             knee: 0.6,
+            streak_threshold: 2.0,
         }
     }
 }
@@ -553,7 +560,7 @@ impl Post {
         let streak = storage_buffer(
             &gpu.device,
             "streak",
-            (levels[2].w * levels[2].h) as u64 * 16,
+            (levels[0].w * levels[0].h) as u64 * 16,
         );
         let dst = storage_buffer(&gpu.device, "post dst", pixels * 16);
         let bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -623,7 +630,9 @@ impl Post {
                 f: [knee, 0.0, 0.0, 0.0],
                 ..blank
             });
-            let radius = 4 + i as u32;
+            // Radii scale with the frame so a preview glows like the 4K final;
+            // fixed pixel radii made the 4K glow half as wide.
+            let radius = ((4 + i) as f32 * width as f32 / 1920.0).round().max(1.0) as u32;
             passes.push(PassParams {
                 src_size: [lv.w, lv.h],
                 dst_size: [lv.w, lv.h],
@@ -648,28 +657,31 @@ impl Post {
             });
             prev = (1, lv.off, lv.w, lv.h);
         }
-        // Anamorphic streak: long horizontal blur of the quarter-res level,
-        // applied three times for a smooth falloff.
-        let s = levels[2];
-        let mut from = (1u32, s.off);
-        for pass in 0..3 {
-            let to = if pass % 2 == 0 {
-                (3u32, 0u32)
-            } else {
-                (2u32, 0u32)
-            };
+        // Anamorphic streak: only highlights far above the gas, at half
+        // resolution, blurred sideways over a fixed fraction of the frame so
+        // previews and 4K flare alike. Sourced from all light, it veiled the
+        // frame; sourced from a coarse level, it averaged the stars away.
+        let s = levels[0];
+        passes.push(PassParams {
+            src_size: [width, height],
+            dst_size: [s.w, s.h],
+            src_buf: 0,
+            dst_buf: 3,
+            mode: 0,
+            f: [0.0, look.streak_threshold, 0.0, 0.0],
+            ..blank
+        });
+        let radius = (s.w as f32 * 0.03).round().max(4.0);
+        for (from, to) in [(3u32, 2u32), (2, 3)] {
             passes.push(PassParams {
                 src_size: [s.w, s.h],
                 dst_size: [s.w, s.h],
-                src_off: from.1,
-                dst_off: to.1,
-                src_buf: from.0,
-                dst_buf: to.0,
+                src_buf: from,
+                dst_buf: to,
                 mode: 1,
-                f: [1.0, 0.0, 40.0, 22.0],
+                f: [1.0, 0.0, radius, radius * 0.55],
                 ..blank
             });
-            from = to;
         }
         let mut level_table = [[0u32; 4]; 6];
         for (i, lv) in levels.iter().enumerate() {

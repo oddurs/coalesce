@@ -33,7 +33,7 @@ fn aim(frame: &mut Frame, pos: [f32; 3], look_at: [f32; 3], up: [f32; 3]) {
 
 /// Mean RGB of the probe image.
 fn trace(tracer: &mut Tracer, gpu: &Gpu, frame: &Frame) -> [f32; 3] {
-    let accum = tracer.render(gpu, frame, &probe_quality()).unwrap();
+    let accum = tracer.render(gpu, &[*frame], &probe_quality()).unwrap();
     let mut sum = [0.0; 3];
     for px in accum.as_chunks::<4>().0 {
         for c in 0..3 {
