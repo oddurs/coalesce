@@ -27,7 +27,7 @@ served as a fullscreen video by a SvelteKit site.
 ## Rendering
 
 - Units: gravitational radius of the total mass is 1. Scene time is loop seconds.
-- The loop is 1440 frames at 24 fps. Frame 0 and frame 1440 are the same image by
+- The loop is 75 s, 1800 frames at 24 fps. Frame 0 and frame 1800 are the same image by
   construction. The camera runs on loop time and is periodic; the seam is a short dissolve
   while it looks up and away, with the opening binary at the remnant's mass until it is
   back in frame, so both sides lens the sky alike.

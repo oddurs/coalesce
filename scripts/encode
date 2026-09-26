@@ -7,7 +7,7 @@ frames=${1:-out/frames}/png
 out=${2:-out/video}
 mkdir -p "$out"
 n=$(ls "$frames"/frame_*.png | wc -l | tr -d ' ')
-[ "$n" -eq 1440 ] || echo "warning: $n frames, expected 1440" >&2
+[ "$n" -eq 1800 ] || echo "warning: $n frames, expected 1800" >&2
 
 # Master: ProRes 4444, full-range 4:4:4 10-bit, no loss the eye can find.
 ffmpeg -y -loglevel error -stats -framerate 24 -i "$frames/frame_%04d.png" \
