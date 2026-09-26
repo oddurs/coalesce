@@ -22,7 +22,7 @@ struct Params {
     res: vec4<u32>,         // width, height, tile x, tile y
     misc: vec4<f32>,        // time, sample index, max steps, unused
     big: vec4<f32>,         // circumbinary inner, outer, gain, temperature
-    sky: vec4<f32>,         // star gain, nebula gain, star size, unused
+    sky: vec4<f32>,         // star gain, nebula gain, star size, pixel angle
     gw: vec4<f32>,          // wave speed, table t0, table dt, table length
     gw2: vec4<f32>,         // lens strength, disk ripple strength, flash, stream gain
     spiral: vec4<f32>,      // spiral phase, strength, lump phase, lump strength
@@ -184,6 +184,7 @@ fn disk_sample(
     x: vec3<f32>, ray_dir: vec3<f32>, center: vec3<f32>, center_vel: vec3<f32>,
     normal: vec3<f32>, tangent: vec3<f32>, mass: f32, rs_grav: f32,
     inner: f32, outer: f32, gain: f32, temp_in: f32, seed: f32, thick: f32, scale: f32, ripple: f32, driven: f32, falloff: f32,
+    footprint: f32,
 ) -> DiskSample {
     var out: DiskSample;
     out.emission = vec3<f32>(0.0);
@@ -220,6 +221,25 @@ fn disk_sample(
     // here leaves isolated ribbons that read as wire, not plasma.
     let clump = smoothstep(0.3, 0.75, n);
     var dens = 0.22 + 0.78 * clump * clump;
+    // Fine filaments: thin lanes along the orbit that break up around it,
+    // the detail a 4K frame can resolve. Each band fades out where the
+    // pixel's footprint on the disk outgrows its lanes, so it never aliases
+    // into moire at grazing angles or far away.
+    let lane_world = r * log(outer / inner) / cycles;
+    var fil_amp = 1.0;
+    var fil = 0.0;
+    var fil_w = 0.0;
+    for (var o = 0; o < 3; o++) {
+        let k = 5.0 * pow(3.0, f32(o));
+        let lod = 1.0 - smoothstep(0.25, 0.7, footprint * k / lane_world);
+        if (lod <= 0.0) { break; }
+        let qf = vec3<f32>(cos(phi_rot) * az * k * 0.35, sin(phi_rot) * az * k * 0.35, (rho * cycles + seed) * k);
+        let ridge = 1.0 - abs(2.0 * fbm(qf + vec3<f32>(warp * 3.0, n1 * 2.0, f32(o) * 5.3), 2) - 1.0);
+        fil += fil_amp * lod * (pow(ridge, 3.0) - 0.3);
+        fil_w += fil_amp * lod;
+        fil_amp *= 0.6;
+    }
+    dens *= 1.0 + 1.4 * fil / max(fil_w, 1.0) * min(fil_w, 1.0);
     if (driven > 0.0) {
         // Two-armed trailing spiral locked to the binary, and the lopsided
         // overdensity that orbits the cavity edge. Both fade outward.
@@ -302,7 +322,7 @@ fn corona(x: vec3<f32>, center: vec3<f32>, normal: vec3<f32>, inner: f32, outer:
     return bb_color(temp * 0.9) * vertical * radial * gain * 0.008;
 }
 
-fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
+fn sample_volume(x: vec3<f32>, dir: vec3<f32>, footprint: f32) -> DiskSample {
     var total: DiskSample;
     total.emission = vec3<f32>(0.0);
     total.density = 0.0;
@@ -312,7 +332,7 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
         let s = disk_sample(
             x, dir, b.pos_rs.xyz, b.vel_mass.xyz, b.normal.xyz, b.tangent.xyz,
             b.vel_mass.w, b.pos_rs.w, b.disk.x, b.disk.y, b.disk.z, b.disk.w,
-            f32(i) * 7.3, 0.04, 1.0, 0.0, 0.0, 0.0,
+            f32(i) * 7.3, 0.04, 1.0, 0.0, 0.0, 0.0, footprint,
         );
         total.emission += s.emission;
         total.density += s.density;
@@ -327,7 +347,7 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>) -> DiskSample {
     let ripple = P.gw2.y * wave.h * length(x.xz);
     let big = disk_sample(
         x, dir, vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0),
-        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.009, 2.5, ripple, 1.0, 1.6,
+        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.009, 2.5, ripple, 1.0, 1.6, footprint,
     );
     total.emission += big.emission;
     total.density += big.density;
@@ -437,6 +457,8 @@ fn step_limit(x: vec3<f32>) -> f32 {
 
 fn trace(origin: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
     var x = origin;
+    // Distance travelled: with the pixel angle, the pixel's size out here.
+    var travel = 0.0;
     var v = dir;
     var col = vec3<f32>(0.0);
     var transmit = 1.0;
@@ -475,12 +497,16 @@ fn trace(origin: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
         let k4x = v + h * k3v;
         let dx = (h / 6.0) * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
         let dv = (h / 6.0) * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
-        let mid = x + 0.5 * dx;
+        // Sample the volume at a random point along the step, not its middle:
+        // neighbouring pixels take near-identical steps, and fixed sample
+        // points lined up into contour ripples across grazing gas.
+        let mid = x + rand() * dx;
         let seg = length(dx);
+        travel += seg;
         x += dx;
         v += dv;
 
-        let s = sample_volume(mid, v);
+        let s = sample_volume(mid, v, max(travel * P.sky.w, 1e-4));
         // Corona and flash glow where there is no gas to absorb. Gating the
         // emission on density clipped them to the disk slabs, and lensing drew
         // those clips as hard-edged boxes.

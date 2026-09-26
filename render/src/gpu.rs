@@ -203,7 +203,7 @@ fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
             frame.circumbinary_gain,
             3900.0,
         ],
-        sky: [q.sky, q.sky * 0.3, px_rad * 1.1, 0.0],
+        sky: [q.sky, q.sky * 0.3, px_rad * 1.1, px_rad],
         gw: [
             scene::GW_SPEED,
             scene::GW_T0,
