@@ -134,6 +134,7 @@ struct TraceParams {
     gw: [f32; 4],
     gw2: [f32; 4],
     spiral: [f32; 4],
+    mood: [f32; 4],
     bodies: [GpuBody; 2],
 }
 
@@ -225,6 +226,7 @@ fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
             if frame.merged { 0.0 } else { 1.0 },
         ],
         spiral: [frame.spiral_phase, 0.45, frame.lump_phase, 0.6],
+        mood: [frame.sky_gain, frame.sky_saturation, frame.electric, 0.0],
         bodies,
     }
 }

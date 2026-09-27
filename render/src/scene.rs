@@ -132,6 +132,12 @@ pub struct Frame {
     pub spiral_phase: f32,
     /// Phase of the lopsided overdensity orbiting the cavity edge.
     pub lump_phase: f32,
+    /// The sky's brightness and colour, 1 at rest: drained as the pair
+    /// tightens, flooding back with the flash.
+    pub sky_gain: f32,
+    pub sky_saturation: f32,
+    /// Crackle in the hottest gas of the mini-disks, surging on each eclipse.
+    pub electric: f32,
     pub merged: bool,
 }
 
@@ -150,6 +156,12 @@ pub fn shutter_times(t: f32, n: u32) -> Vec<f32> {
 fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// Quintic ease: zero velocity and zero acceleration at both ends.
+fn smootherstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 }
 
 /// How fast physical time runs at loop time `t`. Real time up to the merger,
@@ -391,6 +403,38 @@ pub fn exposure(tau: f32) -> f32 {
     build * settle * fall
 }
 
+/// The sky's life, as (brightness, saturation). Through the build the stars
+/// and nebula dim and grey, as if the merger drew the light out of them; with
+/// the flash they flood back past their rest and settle.
+pub fn sky_life(tau: f32) -> (f32, f32) {
+    const DRAINED: (f32, f32) = (0.45, 0.4);
+    let s = tau - T_COALESCE;
+    if s < 0.0 {
+        let k = smoothstep(-26.0, -0.3, s);
+        (1.0 - (1.0 - DRAINED.0) * k * k, 1.0 - (1.0 - DRAINED.1) * k)
+    } else {
+        let back = smoothstep(0.0, 0.15, s);
+        let gain = DRAINED.0 + (1.0 + 0.25 * (-s / 1.2).exp() - DRAINED.0) * back;
+        (
+            gain,
+            DRAINED.1 + (1.0 - DRAINED.1) * smoothstep(0.0, 0.3, s),
+        )
+    }
+}
+
+/// How much the mini-disks' hottest gas crackles: a low idle, a surge on
+/// each eclipse, which the song's pulse times, growing through the build.
+pub fn electric(tau: f32) -> f32 {
+    if tau >= T_COALESCE {
+        return 0.0;
+    }
+    let (count, _) = pass_count(tau);
+    let off = count - count.round();
+    let surge = (-(off * off) / (2.0 * 0.07 * 0.07)).exp();
+    let build = smoothstep(T_COALESCE - 30.0, T_COALESCE, tau);
+    (0.3 + 0.7 * surge) * (0.6 + 0.4 * build)
+}
+
 /// Angular rate of the cavity-edge overdensity: Keplerian at the cavity.
 pub fn lump_rate(cavity: f32) -> f32 {
     kepler_rate(cavity)
@@ -431,54 +475,66 @@ pub fn gw_table() -> Vec<[f32; 4]> {
 }
 
 /// Camera keyframes on loop time: (t, distance, elevation deg, azimuth deg,
-/// fov deg, roll deg, tilt deg). The last key is the first one a loop later,
-/// one full turn round, so the path is periodic. Tilt lifts the view off the
-/// system toward the sky: the loop closes looking up and away in the silence
-/// after the song, and opens by tilting back down onto the binary, arriving
-/// on the song's first big swell. Keys sit on the song's landmarks.
-const CAMERA_KEYS: [[f32; 7]; 30] = [
-    [0.0, 170.0, 14.0, 0.0, 32.0, 0.0, 25.0],
-    [3.0, 169.0, 14.0, 3.0, 32.0, 0.0, 24.0],
-    [8.0, 161.0, 13.8, 10.0, 32.0, 0.0, 15.0],
-    [12.0, 147.0, 13.4, 18.0, 32.0, 0.0, 4.5],
-    // The first big swell.
-    [14.5, 136.0, 13.0, 23.0, 32.2, 0.0, 0.0],
-    [20.0, 113.0, 12.0, 33.0, 33.0, 0.0, 0.0],
+/// fov deg, roll deg). The last key is the first one a loop later, one full
+/// turn round, so the path is periodic. Keys sit on the song's landmarks. The
+/// tilt to the sky and back is its own eased curve, [`tilt`].
+const CAMERA_KEYS: [[f32; 6]; 28] = [
+    [0.0, 170.0, 14.0, 0.0, 32.0, 0.0],
+    [4.0, 168.0, 13.9, 4.0, 32.0, 0.0],
+    [9.0, 157.0, 13.6, 12.0, 32.0, 0.0],
+    // The first big swell: the pair arrives in frame.
+    [14.5, 136.0, 13.0, 21.0, 32.2, 0.0],
+    [20.0, 113.0, 12.0, 31.0, 33.0, 0.0],
     // The body of the song comes in.
-    [27.0, 90.0, 10.0, 46.0, 34.0, 0.0, 0.0],
-    [40.0, 68.0, 6.5, 72.0, 35.0, 0.5, 0.0],
-    [55.0, 57.0, 3.0, 101.0, 35.5, 1.5, 0.0],
-    // Edge on: the disks' light bends over and under the far hole.
-    [72.0, 51.0, 1.4, 131.0, 36.0, 2.5, 0.0],
-    [88.0, 48.0, 3.5, 154.0, 36.5, 3.0, 0.0],
-    // The song lifts and brightens; so does the view.
-    [97.5, 49.0, 8.5, 167.0, 36.5, 2.0, 0.0],
-    [110.0, 52.0, 13.0, 182.0, 36.0, 1.0, 0.0],
+    [27.0, 90.0, 10.0, 44.0, 34.0, 0.0],
+    [40.0, 68.0, 6.5, 70.0, 35.0, 0.5],
+    [55.0, 56.0, 3.0, 99.0, 35.5, 1.5],
+    // Edge on for the eclipse on bar 22: the disks' light bends over and
+    // under the far hole.
+    [72.0, 50.0, 1.2, 129.0, 36.0, 2.5],
+    // Down under the disk's plane...
+    [84.0, 47.0, -2.0, 149.0, 36.5, 3.0],
+    // ...and up over it as the song lifts and brightens.
+    [97.5, 49.0, 7.5, 166.0, 36.5, 1.5],
+    [110.0, 53.0, 13.0, 182.0, 36.0, 0.5],
     // The bass drops out and slams back.
-    [126.5, 47.0, 8.5, 197.0, 37.0, 2.0, 0.0],
-    [129.7, 44.5, 7.0, 201.0, 37.0, 2.5, 0.0],
-    [142.5, 40.0, 4.0, 218.0, 38.0, 4.0, 0.0],
-    // The held breath before the build.
-    [148.5, 38.0, 3.5, 226.0, 38.5, 5.0, 0.0],
-    [160.0, 33.5, 6.0, 244.0, 40.0, 7.0, 0.0],
-    [168.0, 30.5, 9.0, 259.0, 41.0, 8.5, 0.0],
-    // The merger.
-    [174.5, 28.0, 12.0, 273.0, 42.0, 9.0, 0.0],
-    [180.0, 27.0, 15.0, 287.0, 40.5, 7.0, 0.0],
-    [188.0, 27.0, 17.0, 303.0, 39.0, 4.5, 0.0],
-    [199.0, 33.0, 16.5, 321.0, 37.5, 2.5, 0.0],
-    // The song fades; the camera lets go of the remnant and looks up.
-    [204.0, 68.0, 15.5, 334.0, 35.0, 1.0, 0.0],
-    [208.0, 122.0, 15.0, 344.0, 33.0, 0.4, 2.0],
-    [210.5, 150.0, 14.5, 349.5, 32.3, 0.1, 12.0],
-    [212.5, 161.0, 14.2, 353.0, 32.0, 0.0, 21.0],
-    [214.5, 166.0, 14.1, 355.5, 32.0, 0.0, 24.5],
-    [217.5, 169.0, 14.0, 358.5, 32.0, 0.0, 25.0],
-    [220.0, 170.0, 14.0, 360.0, 32.0, 0.0, 25.0],
+    [126.5, 47.0, 8.5, 197.0, 37.0, 2.0],
+    [129.7, 44.5, 7.0, 201.0, 37.0, 2.5],
+    [142.5, 40.0, 4.0, 218.0, 38.0, 4.0],
+    // The held breath. From here to the merger the camera pushes in as the
+    // lens widens, the pair held the same size in frame while the world
+    // around it stretches: tan(fov / 2) * distance stays constant.
+    [148.5, 38.0, 3.5, 226.0, 38.5, 5.0],
+    [156.0, 33.0, 5.0, 239.0, 43.8, 6.0],
+    [164.0, 29.0, 7.5, 253.0, 49.1, 7.5],
+    [170.0, 26.5, 10.0, 264.0, 53.1, 8.5],
+    // The merger, at the widest.
+    [174.5, 25.0, 12.0, 272.0, 55.9, 9.0],
+    // The lens snaps back and the camera is thrown clear: the jolt.
+    [175.4, 26.0, 13.0, 275.0, 45.0, 8.0],
+    [178.0, 26.5, 14.5, 282.0, 41.5, 7.0],
+    [188.0, 27.0, 17.0, 303.0, 39.0, 4.5],
+    [199.0, 33.0, 16.5, 321.0, 37.5, 2.5],
+    // The song fades; the camera lets go of the remnant.
+    [204.0, 66.0, 15.5, 334.0, 35.0, 1.0],
+    [209.0, 128.0, 14.8, 345.0, 33.0, 0.3],
+    [214.0, 163.0, 14.2, 354.0, 32.0, 0.0],
+    [220.0, 170.0, 14.0, 360.0, 32.0, 0.0],
 ];
 
+/// How far the view is tilted up off the system toward the sky, degrees.
+pub const TILT_SKY: f32 = 25.0;
+
+/// The tilt: up and away to the sky as the song fades, and back down onto
+/// the pair on the first big swell. A quintic ease at both ends, so each pan
+/// starts and lands without a jerk.
+pub fn tilt(t: f32) -> f32 {
+    let t = t.rem_euclid(LOOP_SECONDS);
+    TILT_SKY * (1.0 - smootherstep(0.0, 14.5, t) + smootherstep(201.0, 216.5, t))
+}
+
 /// Key `i`, extended periodically past both ends.
-fn key(i: isize) -> [f32; 7] {
+fn key(i: isize) -> [f32; 6] {
     let n = CAMERA_KEYS.len() as isize - 1;
     let laps = i.div_euclid(n);
     let mut k = CAMERA_KEYS[i.rem_euclid(n) as usize];
@@ -490,7 +546,7 @@ fn key(i: isize) -> [f32; 7] {
 /// Periodic cubic Hermite with finite-difference tangents in real time, so
 /// unevenly spaced keys do not overshoot and the seam is as smooth as any
 /// other instant.
-fn camera_key(t: f32) -> [f32; 6] {
+fn camera_key(t: f32) -> [f32; 5] {
     let t = t.rem_euclid(LOOP_SECONDS);
     let mut i = 0;
     while CAMERA_KEYS[i + 1][0] <= t {
@@ -500,7 +556,7 @@ fn camera_key(t: f32) -> [f32; 6] {
     let (k1, k2) = (key(i), key(i + 1));
     let dt = k2[0] - k1[0];
     let s = ((t - k1[0]) / dt).clamp(0.0, 1.0);
-    let slope = |a: [f32; 7], b: [f32; 7], j: usize| (b[j] - a[j]) / (b[0] - a[0]);
+    let slope = |a: [f32; 6], b: [f32; 6], j: usize| (b[j] - a[j]) / (b[0] - a[0]);
     // Fritsch-Carlson limiting: flat where the slope changes sign, and never
     // more than three times the gentler neighbour.
     let tangent = |idx: isize, j: usize| {
@@ -521,7 +577,7 @@ fn camera_key(t: f32) -> [f32; 6] {
         -2.0 * s * s * s + 3.0 * s * s,
         s * s * s - s * s,
     );
-    let mut out = [0.0; 6];
+    let mut out = [0.0; 5];
     for (j, o) in out.iter_mut().enumerate() {
         let (m1, m2) = (tangent(i, j + 1) * dt, tangent(i + 1, j + 1) * dt);
         *o = h00 * k1[j + 1] + h10 * m1 + h01 * k2[j + 1] + h11 * m2;
@@ -561,8 +617,9 @@ pub const TARGET: [f32; 3] = [0.0, 0.4, 0.0];
 /// Camera at loop time `t`. The path runs on loop time so it is periodic; only
 /// the rumble of the build and the merger jolt follow physical time `tau`.
 pub fn camera(t: f32, tau: f32) -> Camera {
-    let [dist, elev, azim, fov, roll, tilt] = camera_key(t);
+    let [dist, elev, azim, fov, roll] = camera_key(t);
     let t = t.rem_euclid(LOOP_SECONDS);
+    let tilt = tilt(t);
     let (el, az) = (elev.to_radians(), azim.to_radians());
     let jolt = shake(tau);
     let drift = sway(t, dist);
@@ -695,6 +752,9 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
         exposure: exposure(tau),
         spiral_phase: phi,
         lump_phase: lump_rate(circumbinary_inner) * tau,
+        sky_gain: sky_life(tau).0,
+        sky_saturation: sky_life(tau).1,
+        electric: electric(tau),
         merged,
     }
 }
@@ -950,6 +1010,56 @@ mod tests {
         // Coalescence falls on the downbeat of bar 54.
         let k = (T_COALESCE - BAR0) / BAR;
         assert!((k - 54.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_dolly_zoom_holds_the_pair_in_frame() {
+        // Through the build the camera pushes in as the lens widens: the pair
+        // keeps its size in frame, tan(fov / 2) * distance, while the world
+        // round it stretches.
+        let framing = |t: f32| {
+            let [dist, _, _, fov, _] = camera_key(t);
+            (fov.to_radians() / 2.0).tan() * dist
+        };
+        let start = framing(148.5);
+        let mut t = 148.5;
+        while t <= T_COALESCE {
+            let f = framing(t);
+            assert!(
+                (f / start - 1.0).abs() < 0.03,
+                "t={t} framing {f} vs {start}"
+            );
+            t += 0.25;
+        }
+        // It is a real widening, and the lens snaps back after the flash.
+        assert!(camera_key(T_COALESCE)[3] > camera_key(148.5)[3] + 15.0);
+        assert!(camera_key(T_COALESCE + 1.5)[3] < camera_key(T_COALESCE)[3] - 10.0);
+    }
+
+    #[test]
+    fn the_tilt_starts_and_lands_without_a_jerk() {
+        let rate = |t: f32| (tilt(t + 0.01) - tilt(t - 0.01)) / 0.02;
+        // Level on the pair through the film, up at the sky across the seam.
+        assert_eq!(tilt(100.0), 0.0);
+        assert_eq!(tilt(0.0), TILT_SKY);
+        assert!((tilt(T_CUT) - TILT_SKY).abs() < 0.2);
+        // Each pan eases out of rest and into it.
+        for t in [0.02, 14.48, 201.02, 216.48] {
+            assert!(rate(t).abs() < 0.05, "t={t} rate {}", rate(t));
+        }
+    }
+
+    #[test]
+    fn the_sky_drains_into_the_merger_and_floods_back() {
+        let (rest, _) = sky_life(100.0);
+        let (drained, grey) = sky_life(T_COALESCE - 0.3);
+        let (after, colour) = sky_life(T_COALESCE + 0.5);
+        assert_eq!(rest, 1.0);
+        assert!(drained < 0.5 && grey < 0.5);
+        assert!(after > 1.0 && colour > 0.99);
+        assert!((sky_life(T_COALESCE + 20.0).0 - 1.0).abs() < 0.01);
+        // Continuous through the merger: no pop in the stars.
+        assert!((sky_life(T_COALESCE - 1e-4).0 - sky_life(T_COALESCE + 1e-4).0).abs() < 0.01);
     }
 
     #[test]
