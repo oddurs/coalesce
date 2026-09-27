@@ -1,6 +1,6 @@
 # black-hole
 
-A binary black hole merger rendered as a 60 second seamless loop at 4096x2160 (1.90:1),
+A binary black hole merger scored to a song: a 220 second seamless loop in the 1.90:1 frame,
 served as a fullscreen video by a SvelteKit site.
 
 ## Layout
@@ -27,10 +27,18 @@ served as a fullscreen video by a SvelteKit site.
 ## Rendering
 
 - Units: gravitational radius of the total mass is 1. Scene time is loop seconds.
-- The loop is 75 s, 1800 frames at 24 fps. Frame 0 and frame 1800 are the same image by
-  construction. The camera runs on loop time and is periodic; the seam is a short dissolve
-  while it looks up and away, with the opening binary at the remnant's mass until it is
-  back in frame, so both sides lens the sky alike.
+- The loop is 220 s, 5280 frames at 24 fps: the song (213.6 s, "Vast Sustained Peak", not in
+  the repo) from frame 0, then two bars of silence. Frame 0 and frame 5280 are the same image
+  by construction. The camera runs on loop time and is periodic; the seam is a dissolve in the
+  silence while it looks up and away, with the opening binary at the remnant's mass until it
+  is back in frame, so both sides lens the sky alike.
+- The timeline is scored: 75 bpm, bars from 1.666 s. The pair eclipses (lines up with the
+  camera) on the song's hits, `ECLIPSES` in `scene.rs`, and merges on the downbeat at
+  174.466 s where its riser peaks; between hits the orbit speeds up smoothly. Physical time
+  runs unwarped up to the merger so the eclipses stay on the beat. Keep camera keys on the
+  song's landmarks; the eclipses are tested against the camera, so moving a key moves them.
+- Judge timing with sound: `scripts/preview <song.wav>` renders the loop small and puts the
+  song under it in `out/preview.mp4`.
 - Look-dev at 1920x1010 with low samples (`scripts/render --preview --t <s>`). Final at 4096x2160.
 - A look change alone is `render post` over the EXRs; only physics or geometry changes need a retrace.
 - Check stills at 1:1 at 4K before trusting a look; previews hid disk aliasing and bokeh noise.

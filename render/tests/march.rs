@@ -20,7 +20,9 @@ fn ripple_score() -> f32 {
     };
     let gpu = Gpu::new().unwrap();
     let mut tracer = Tracer::new(&gpu);
-    let t = 56.0;
+    // Eight and a half seconds after the merger: the remnant's disk has had
+    // the same few physical seconds to grow as when this was measured.
+    let t = scene::T_COALESCE + 8.5;
     let frames: Vec<_> = scene::shutter_times(t, q.spp)
         .iter()
         .map(|&s| scene::frame(s))
