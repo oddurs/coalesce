@@ -45,11 +45,11 @@
 
 	// Music is off until asked for: browsers only start sound from a gesture,
 	// and nobody wants a page that shouts. The track loads on first use.
-	const music = new Music(media('/audio/coalesce.m4a'));
+	const music = new Music(media('/audio/coalesce.m4a'), media('/audio/coalesce-head.m4a'));
 	const VOLUME_KEY = 'coalesce:volume';
 	const SOUND_KEY = 'coalesce:sound';
 	let sound = $state(false);
-	let volume = $state(0.6);
+	let volume = $state(0.5);
 	let musicLoading = $state(false);
 
 	onMount(() => {
@@ -86,6 +86,7 @@
 			if (wanted && !sound) startSound();
 		};
 		if (wanted) {
+			music.prefetch();
 			window.addEventListener('pointerdown', resume, { once: true });
 			window.addEventListener('keydown', resume, { once: true });
 		}
@@ -147,6 +148,14 @@
 		if (ready) wake(INTRO_MS);
 	});
 
+	// Once the film is under way, fetch the music's opening quietly, so a tap
+	// on sound starts it at once rather than after a download.
+	$effect(() => {
+		if (!ready) return;
+		const later = setTimeout(() => music.prefetch(), 2000);
+		return () => clearTimeout(later);
+	});
+
 	// A tap on the picture shows the controls, or hides them if they are up.
 	function tap(event: MouseEvent) {
 		if (event.target !== main && event.target !== video) return;
@@ -186,7 +195,7 @@
 
 	async function startSound() {
 		sound = true;
-		if (volume === 0) volume = 0.6;
+		if (volume === 0) volume = 0.5;
 		remember();
 		musicLoading = true;
 		try {
