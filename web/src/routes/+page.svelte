@@ -3,7 +3,8 @@
 	import { Music } from '$lib/music';
 
 	// The web encodes from scripts/encode ship with the site under /video.
-	const media = (path: string) => (__MEDIA__[path] ? `${path}?v=${__MEDIA__[path]}` : path);
+	const versions = __MEDIA__;
+	const media = (path: string) => (versions[path] ? `${path}?v=${versions[path]}` : path);
 
 	// The browser picks the first source it can decode whose media query
 	// matches, straight from the HTML, so the film starts loading before any
