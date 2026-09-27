@@ -45,17 +45,17 @@ served as a fullscreen video by a SvelteKit site.
 
 ## Deploying
 
-- The site is a static build (`adapter-static`, one prerendered page) and ships with its video.
-- `scripts/encode <frames-dir> <out-dir>` writes the master and the web set: `loop-av1.mp4`,
-  `loop-hevc.mp4`, `loop-720.mp4`, `poster.jpg`, `hero.jpg`. Copy the web set into `web/static/video`.
-- `scripts/music <track.wav>` writes the looped music to `web/static/audio/coalesce.m4a` and its
-  first 20 s to `coalesce-head.m4a`, both gitignored and part of the upload budget (about 3.7 MB).
-  The page starts on the opening and hands over to the whole track, so ship them together.
-- Deploy from `web/` with the Vercel CLI: `vercel deploy` (preview) or `vercel deploy --prod`. The CLI
-  uploads the gitignored video; a Git-connected build would not have it. Keep the upload under Vercel
-  Hobby's 100 MB: the web set and music come to about 92 MB.
-- Media URLs carry a hash of the file (`web/vite.config.ts`) and are cached for a year, so a new
-  encode must be copied in before the build, never swapped into a finished one.
+- The site is a static build (`adapter-static`, one prerendered page) on Vercel. Its media, the
+  film with its score, lives on Cloudflare R2 at media.oddurs.com: 220 s with sound is far past
+  Vercel Hobby's 100 MB upload, and R2 charges nothing for the bandwidth.
+- From a finished master: `scripts/encode` writes the web set to `out/web` (`loop-av1.mp4`,
+  `loop-hevc.mp4`, `loop-720.mp4`, `poster.jpg`, `hero.jpg`), then `scripts/publish` uploads it
+  under content-hashed names and rewrites `web/src/lib/media.json`. Commit the manifest through a
+  PR, then deploy from `web/` with `vercel deploy --prod`. Old media stays on R2, so earlier
+  deploys and rollbacks keep playing.
+- R2 setup, once: `npx wrangler login`, `npx wrangler r2 bucket create coalesce-media`, and
+  media.oddurs.com attached to the bucket as a custom domain (R2, bucket, Settings, Custom
+  Domains). Media is cached for a year: never overwrite a published key.
 - The `<source>` list is in the page's HTML, so the video starts loading before any script runs.
-  Phones, reduced motion and codec choice are media queries and types there, not script.
-
+  Phones, reduced motion and codec choice are media queries and types there, not script. The
+  sound is the film's own track, muted until the viewer asks for it.
