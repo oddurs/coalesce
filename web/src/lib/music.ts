@@ -6,6 +6,11 @@
 const gainOf = (volume: number) => volume * volume;
 /** Fades in and out take about this long, in seconds. */
 const FADE = 0.9;
+/** The opening crossfades into the whole track over this long, in seconds. */
+const HANDOVER = 0.12;
+
+/** A buffer playing on a loop through its own gain, from `startedAt` on the context clock. */
+type Loop = { source: AudioBufferSourceNode; level: GainNode; startedAt: number; length: number };
 
 type AudioSessionNavigator = Navigator & { audioSession?: { type: string } };
 
@@ -13,10 +18,27 @@ export class Music {
 	private ctx?: AudioContext;
 	private gain?: GainNode;
 	private loading?: Promise<void>;
+	private opening?: Promise<ArrayBuffer>;
 	/** Bumped by every play or stop, so a stale stop cannot suspend a replay. */
 	private generation = 0;
 
-	constructor(private readonly url: string) {}
+	/**
+	 * `headUrl` holds the track's opening seconds on their own. Decoding the
+	 * whole track takes over a second and it can queue behind the film's
+	 * download, so sound starts on the opening and hands over when the whole
+	 * track is ready.
+	 */
+	constructor(
+		private readonly url: string,
+		private readonly headUrl: string
+	) {}
+
+	/** Fetch the opening ahead of any click, at low priority. Safe to call again. */
+	prefetch(): void {
+		this.opening ??= bytes(this.headUrl, 'low');
+		// A failed prefetch surfaces in load(), which falls back to the whole track.
+		this.opening.catch(() => {});
+	}
 
 	/**
 	 * Start, loading the track on first use, and fade to `volume`. Call it from
@@ -72,24 +94,74 @@ export class Music {
 		level.setTargetAtTime(target, now, seconds / 3);
 	}
 
+	/** Resolves once sound is playing: the opening, or the whole track without one. */
 	private async load(ctx: AudioContext, gain: GainNode): Promise<void> {
-		const response = await fetch(this.url);
-		if (!response.ok) throw new Error(`music: ${response.status} for ${this.url}`);
-		const buffer = await ctx.decodeAudioData(await response.arrayBuffer());
-		// Some decoders keep encoder padding as exact silence at either end. The
-		// track is never silent there (it loops through a crossfade), so any
-		// run of true zeros at the edges is padding, and the loop skips it.
-		const samples = buffer.getChannelData(0);
-		let head = 0;
-		while (head < 8192 && samples[head] === 0) head++;
-		let tail = samples.length;
-		while (tail > samples.length - 8192 && samples[tail - 1] === 0) tail--;
-		const source = ctx.createBufferSource();
-		source.buffer = buffer;
-		source.loop = true;
-		source.loopStart = head / buffer.sampleRate;
-		source.loopEnd = tail / buffer.sampleRate;
-		source.connect(gain);
-		source.start(0, source.loopStart);
+		this.prefetch();
+		const whole = bytes(this.url, 'high').then((data) => ctx.decodeAudioData(data));
+		let opening: Loop;
+		try {
+			opening = loop(ctx, gain, await ctx.decodeAudioData(await this.opening!), 0);
+		} catch {
+			// No opening (not deployed, or it failed): wait for the whole track.
+			loop(ctx, gain, await whole, 0);
+			return;
+		}
+		whole.then(
+			(buffer) => handOver(ctx, gain, opening, buffer),
+			// The whole track failed: the opening keeps looping on its own.
+			() => {}
+		);
 	}
+}
+
+async function bytes(url: string, priority: RequestPriority): Promise<ArrayBuffer> {
+	const response = await fetch(url, { priority });
+	if (!response.ok) throw new Error(`music: ${response.status} for ${url}`);
+	return response.arrayBuffer();
+}
+
+/** Play `buffer` on a loop from `offset` seconds into the track, starting now. */
+function loop(ctx: AudioContext, out: GainNode, buffer: AudioBuffer, offset: number, at = 0): Loop {
+	// Some decoders keep encoder padding as exact silence at either end. The
+	// track is never silent there (it loops through a crossfade), so any run
+	// of true zeros at the edges is padding, and the loop skips it. Track
+	// time starts at the first real sample, which lines the two files up.
+	const samples = buffer.getChannelData(0);
+	let head = 0;
+	while (head < 8192 && samples[head] === 0) head++;
+	let tail = samples.length;
+	while (tail > samples.length - 8192 && samples[tail - 1] === 0) tail--;
+	const level = ctx.createGain();
+	level.connect(out);
+	const source = ctx.createBufferSource();
+	source.buffer = buffer;
+	source.loop = true;
+	source.loopStart = head / buffer.sampleRate;
+	source.loopEnd = tail / buffer.sampleRate;
+	source.connect(level);
+	const startedAt = Math.max(at, ctx.currentTime);
+	source.start(startedAt, source.loopStart + offset);
+	return {
+		source,
+		level,
+		startedAt: startedAt - offset,
+		length: source.loopEnd - source.loopStart
+	};
+}
+
+/** Crossfade from the opening into the whole track at the same point in the music. */
+function handOver(ctx: AudioContext, out: GainNode, opening: Loop, buffer: AudioBuffer): void {
+	let at = ctx.currentTime + 0.05;
+	let offset = (at - opening.startedAt) % opening.length;
+	// Never straddle the opening's own wrap: hand over just after it instead.
+	if (offset > opening.length - HANDOVER - 0.02) {
+		at += opening.length - offset;
+		offset = 0;
+	}
+	const next = loop(ctx, out, buffer, offset, at);
+	next.level.gain.setValueAtTime(0, at);
+	next.level.gain.linearRampToValueAtTime(1, at + HANDOVER);
+	opening.level.gain.setValueAtTime(1, at);
+	opening.level.gain.linearRampToValueAtTime(0, at + HANDOVER);
+	opening.source.stop(at + HANDOVER);
 }

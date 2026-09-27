@@ -22,3 +22,5 @@ All notable changes to this project are documented here. The format follows
 - The page lists its video sources in the HTML, so the film starts loading before any script runs,
   media URLs are versioned by content and cached for a year, reduced motion downloads no video,
   and the loader returns if playback stalls.
+- Music starts on the click: the track's opening is fetched ahead and decoded in milliseconds,
+  and hands over sample-aligned to the whole track once it has loaded. Volume starts at 50%.
