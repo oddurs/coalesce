@@ -32,7 +32,15 @@ export default defineConfig({
 
 			// A static build: one prerendered page and the video files, so any
 			// static host or CDN can serve it without functions.
-			adapter: adapter()
+			adapter: adapter(),
+			prerender: {
+				// The page links its media, which is gitignored and copied in
+				// before a deploy; a checkout without it must still build.
+				handleHttpError: ({ path, message }) => {
+					if (/^\/(video|audio)\//.test(path)) return;
+					throw new Error(message);
+				}
+			}
 		})
 	]
 });
