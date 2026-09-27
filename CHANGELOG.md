@@ -17,3 +17,5 @@ All notable changes to this project are documented here. The format follows
 - `scripts/render` and `scripts/encode`, with a web set sized for a static deploy.
 - A static site with a minimal player, a landscape-first phone layout, a fade-in from black,
   and a still for reduced motion.
+- The remnant's disk settles into a warped, precessing sheet with spiral arms, a ragged rim
+  and a flared outer edge, and the merger flash holds filament detail instead of clipping.

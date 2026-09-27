@@ -63,6 +63,9 @@ pub struct Body {
     pub disk_temp: f32,
     /// Disk normal.
     pub disk_normal: [f32; 3],
+    /// How much the disk warps, flares and frays, 0 to 1: only the remnant's,
+    /// as its gas settles after the merger.
+    pub disk_life: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -467,6 +470,7 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
         disk_gain: 0.0,
         disk_temp: 9000.0,
         disk_normal: [0.0, 1.0, 0.0],
+        disk_life: 0.0,
     }; 2];
 
     let masses = if merged {
@@ -504,6 +508,7 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
                 tilts[i].cos(),
                 -tilts[i].sin() * dir[0],
             ],
+            disk_life: 0.0,
         };
     }
     if merged {
@@ -515,8 +520,9 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
         bodies[0].disk_outer = bodies[0].disk_inner * (1.3 + 1.7 * grow);
         // Shocked disk gas flashes white-hot and cools back to amber.
         let f = flash(tau);
-        bodies[0].disk_gain = 0.5 * smoothstep(0.0, 2.5, s) + 2.5 * f;
-        bodies[0].disk_temp = 5000.0 + 3500.0 * f;
+        bodies[0].disk_gain = 0.5 * smoothstep(0.0, 2.5, s) + 0.6 * f;
+        bodies[0].disk_life = smoothstep(0.0, 3.0, s);
+        bodies[0].disk_temp = 5000.0 + 2000.0 * f;
         bodies[0].disk_normal = [0.0, 1.0, 0.0];
         bodies[0].vel = [0.0; 3];
         bodies[1].vel = [0.0; 3];
@@ -821,5 +827,16 @@ mod tests {
         assert!(frame(0.0).bodies[0].disk_outer > frame(0.0).bodies[0].disk_inner);
         assert_eq!(frame(50.0).bodies[1].disk_gain, 0.0);
         assert!(frame(50.0).bodies[0].disk_gain > 0.3);
+    }
+
+    #[test]
+    fn remnant_disk_comes_alive_only_after_the_merger() {
+        let merge = loop_time_of(T_COALESCE);
+        for t in [0.0, merge - 1.0, merge - 0.01] {
+            assert!(frame(t).bodies.iter().all(|b| b.disk_life == 0.0), "t={t}");
+        }
+        let settled = frame(60.0);
+        assert!(settled.bodies[0].disk_life > 0.99);
+        assert_eq!(settled.bodies[1].disk_life, 0.0);
     }
 }

@@ -178,29 +178,50 @@ fn doppler(gas_vel: vec3<f32>, ray_dir: vec3<f32>) -> f32 {
     return 1.0 / (gamma * (1.0 - dot(gas_vel, toward)));
 }
 
+// The shape of a living disk, as (lift off the plane, thickness scale, rim
+// scale). The remnant's disk after the merger is tilted gas still settling: a
+// twisted warp that slowly precesses lifts it in and out of its plane, it
+// flares toward the rim, and the rim itself is ragged and shifting. `life` 0
+// is a flat, even disk with a clean edge.
+fn disk_shape(r: f32, phi: f32, inner: f32, outer: f32, life: f32, seed: f32) -> vec3<f32> {
+    if (life <= 0.0) { return vec3<f32>(0.0, 1.0, 1.0); }
+    let span = clamp((r - inner) / (outer - inner), 0.0, 1.0);
+    let twist = phi + 1.4 * log(max(r, inner) / inner) - 0.12 * P.misc.x;
+    let lift = life * r * ((0.045 + 0.08 * span) * sin(twist) + 0.03 * sin(2.0 * twist + 1.3)
+        + 0.035 * sin(3.0 * twist + 0.7));
+    let edge = fbm(vec3<f32>(cos(phi) * 1.8, sin(phi) * 1.8, 0.07 * P.misc.x + seed), 3);
+    // Thicker in some places than others, so the band's edges never run parallel.
+    let swell = fbm(vec3<f32>(cos(phi) * 1.2, sin(phi) * 1.2, 0.05 * P.misc.x + seed + 9.0), 2);
+    let flare = (1.0 + life * 1.6 * span * span) * (1.0 + life * 0.9 * (swell - 0.5));
+    let rim = 1.0 + life * 0.45 * (edge - 0.5);
+    return vec3<f32>(lift, flare, rim);
+}
+
 // Volumetric disk around `center` with the given basis. Returns emission and
 // extinction density at point x.
 fn disk_sample(
     x: vec3<f32>, ray_dir: vec3<f32>, center: vec3<f32>, center_vel: vec3<f32>,
     normal: vec3<f32>, tangent: vec3<f32>, mass: f32, rs_grav: f32,
     inner: f32, outer: f32, gain: f32, temp_in: f32, seed: f32, thick: f32, scale: f32, ripple: f32, driven: f32, falloff: f32,
-    footprint: f32,
+    footprint: f32, life: f32,
 ) -> DiskSample {
     var out: DiskSample;
     out.emission = vec3<f32>(0.0);
     out.density = 0.0;
     if (gain <= 0.0) { return out; }
     let rel = x - center;
-    let z = dot(rel, normal) - ripple;
-    let inplane = rel - z * normal;
+    let height = dot(rel, normal);
+    let inplane = rel - height * normal;
     let r = length(inplane);
-    if (r < inner * 0.85 || r > outer * 1.15) { return out; }
-    let thickness = thick * r + 0.01 * scale;
+    if (r < inner * 0.85 || r > outer * (1.15 + 0.25 * life)) { return out; }
+    let bitangent = cross(normal, tangent);
+    let phi = atan2(dot(inplane, bitangent), dot(inplane, tangent));
+    let shape = disk_shape(r, phi, inner, outer, life, seed);
+    let thickness = (thick * r + 0.01 * scale) * shape.y;
+    let z = height - ripple - shape.x;
     let zn = z / thickness;
     if (abs(zn) > 3.0) { return out; }
 
-    let bitangent = cross(normal, tangent);
-    let phi = atan2(dot(inplane, bitangent), dot(inplane, tangent));
     // Keplerian shear, scaled like the orbit so the disks rotate on screen.
     let omega = 22.0 * pow(max(r, 0.5), -1.5) * sqrt(mass);
     let phi_rot = phi - omega * P.misc.x * 0.35;
@@ -250,10 +271,19 @@ fn disk_sample(
         let lump_fade = exp(-(r - inner) / (0.25 * inner));
         dens *= (1.0 + P.spiral.y * driven * arms * arm_fade) * (1.0 + P.spiral.w * driven * lump * lump_fade);
     }
-    let edge_in = smoothstep(inner * 0.85, inner * 1.05, r);
-    let edge_out = 1.0 - smoothstep(outer * 0.8, outer * 1.15, r);
+    // A living disk's inner edge is ragged too, where gas peels off and
+    // plunges: the fray is tied to the rim's.
+    let fray = 1.0 + life * 0.6 * (shape.z - 1.0);
+    let edge_in = smoothstep(inner * 0.85 * fray, inner * 1.05 * fray, r);
+    let edge_out = 1.0 - smoothstep(outer * 0.8 * shape.z, outer * 1.15 * shape.z, r);
     let vertical = exp(-zn * zn);
     let radial = pow(inner / r, 1.6);
+    if (life > 0.0) {
+        // Two trailing arms, sheared with the gas: the remnant's disk carries
+        // brighter and darker arcs instead of an even glow.
+        let arms = cos(2.0 * phi_rot + 3.0 * log(max(r, inner) / inner));
+        dens *= 1.0 + life * 0.55 * arms;
+    }
     dens *= edge_in * edge_out * vertical * radial;
 
     let vmag = sqrt(mass / max(r, 0.5));
@@ -332,7 +362,7 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>, footprint: f32) -> DiskSample {
         let s = disk_sample(
             x, dir, b.pos_rs.xyz, b.vel_mass.xyz, b.normal.xyz, b.tangent.xyz,
             b.vel_mass.w, b.pos_rs.w, b.disk.x, b.disk.y, b.disk.z, b.disk.w,
-            f32(i) * 7.3, 0.04, 1.0, 0.0, 0.0, 0.0, footprint,
+            f32(i) * 7.3, 0.04, 1.0, 0.0, 0.0, 0.0, footprint, b.tangent.w,
         );
         total.emission += s.emission;
         total.density += s.density;
@@ -347,7 +377,7 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>, footprint: f32) -> DiskSample {
     let ripple = P.gw2.y * wave.h * length(x.xz);
     let big = disk_sample(
         x, dir, vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0),
-        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.009, 2.5, ripple, 1.0, 1.6, footprint,
+        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.009, 2.5, ripple, 1.0, 1.6, footprint, 0.0,
     );
     total.emission += big.emission;
     total.density += big.density;
@@ -356,7 +386,7 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>, footprint: f32) -> DiskSample {
     // moments. Weighted by density so empty space stays dark.
     let flash = P.gw2.z;
     if (flash > 0.0) {
-        total.emission += bb_color(7500.0) * exp(-length(x) / 3.5) * 2.0 * flash * total.density;
+        total.emission += bb_color(7500.0) * exp(-length(x) / 3.5) * 0.8 * flash * total.density;
     }
     return total;
 }
@@ -431,14 +461,16 @@ fn sky(d: vec3<f32>) -> vec3<f32> {
 
 // Largest step that will not skip across a disk slab. Inside the slab the
 // step is a fraction of the thickness; outside it is half the distance to it.
-fn disk_step_limit(x: vec3<f32>, center: vec3<f32>, normal: vec3<f32>, inner: f32, outer: f32, gain: f32, thick: f32, scale: f32) -> f32 {
+fn disk_step_limit(x: vec3<f32>, center: vec3<f32>, normal: vec3<f32>, inner: f32, outer: f32, gain: f32, thick: f32, scale: f32, life: f32) -> f32 {
     if (gain <= 0.0) { return 1e9; }
     let rel = x - center;
     let z = abs(dot(rel, normal));
     let r = length(rel - dot(rel, normal) * normal);
-    if (r < inner * 0.7 || r > outer * 1.3) { return 1e9; }
-    let thickness = thick * r + 0.01 * scale;
-    let slab = 3.0 * thickness;
+    if (r < inner * 0.7 || r > outer * (1.3 + 0.25 * life)) { return 1e9; }
+    // A living disk leaves its plane and flares: widen the slab to cover the
+    // warp's reach and the thickest flare, or rays would step over the gas.
+    let thickness = (thick * r + 0.01 * scale) * (1.0 + 1.6 * life) * (1.0 + 0.45 * life);
+    let slab = 3.0 * thickness + life * 0.19 * r;
     if (z < slab) { return max(0.3 * thickness, 0.015); }
     return max(0.5 * (z - slab), 0.05);
 }
@@ -447,9 +479,9 @@ fn step_limit(x: vec3<f32>) -> f32 {
     var h = 1e9;
     for (var i = 0; i < 2; i++) {
         let b = P.bodies[i];
-        h = min(h, disk_step_limit(x, b.pos_rs.xyz, b.normal.xyz, b.disk.x, b.disk.y, b.disk.z, 0.04, 1.0));
+        h = min(h, disk_step_limit(x, b.pos_rs.xyz, b.normal.xyz, b.disk.x, b.disk.y, b.disk.z, 0.04, 1.0, b.tangent.w));
     }
-    h = min(h, disk_step_limit(x, vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), P.big.x, P.big.y, P.big.z, 0.009, 2.5));
+    h = min(h, disk_step_limit(x, vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), P.big.x, P.big.y, P.big.z, 0.009, 2.5, 0.0));
     return h;
 }
 

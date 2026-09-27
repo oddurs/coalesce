@@ -187,7 +187,7 @@ fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
             vel_mass: v4(b.vel, b.mass),
             disk: [b.disk_inner, b.disk_outer, b.disk_gain, b.disk_temp],
             normal: v4(n, 0.0),
-            tangent: v4(tangent, 0.0),
+            tangent: v4(tangent, b.disk_life),
         }
     });
     TraceParams {
