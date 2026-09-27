@@ -44,5 +44,9 @@ served as a fullscreen video by a SvelteKit site.
   gitignored and also part of the upload budget (about 3.4 MB).
 - Deploy from `web/` with the Vercel CLI: `vercel deploy` (preview) or `vercel deploy --prod`. The CLI
   uploads the gitignored video; a Git-connected build would not have it. Keep the upload under Vercel
-  Hobby's 100 MB: the 2K web set is about 81 MB.
+  Hobby's 100 MB: the web set and music come to about 91 MB.
+- Media URLs carry a hash of the file (`web/vite.config.ts`) and are cached for a year, so a new
+  encode must be copied in before the build, never swapped into a finished one.
+- The `<source>` list is in the page's HTML, so the video starts loading before any script runs.
+  Phones, reduced motion and codec choice are media queries and types there, not script.
 

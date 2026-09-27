@@ -6,7 +6,28 @@
 	"outputDirectory": "build",
 	"headers": [
 		{
-			"source": "/video/(.*)",
+			"source": "/(video|audio)/(.*)",
+			"has": [
+				{
+					"type": "query",
+					"key": "v"
+				}
+			],
+			"headers": [
+				{
+					"key": "Cache-Control",
+					"value": "public, max-age=31536000, immutable"
+				}
+			]
+		},
+		{
+			"source": "/(video|audio)/(.*)",
+			"missing": [
+				{
+					"type": "query",
+					"key": "v"
+				}
+			],
 			"headers": [
 				{
 					"key": "Cache-Control",

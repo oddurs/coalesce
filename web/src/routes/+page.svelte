@@ -3,12 +3,24 @@
 	import { Music } from '$lib/music';
 
 	// The web encodes from scripts/encode ship with the site under /video.
-	const base = '/video';
-	const small = ['loop-720.mp4', 'video/mp4; codecs="avc1.64001f"'];
-	const full = [
-		['loop-av1.mp4', 'video/mp4; codecs="av01.0.08M.10"'],
-		['loop-hevc.mp4', 'video/mp4; codecs="hvc1.2.4.L120.B0"'],
-		small
+	const versions = __MEDIA__;
+	const media = (path: string) => (versions[path] ? `${path}?v=${versions[path]}` : path);
+
+	// The browser picks the first source it can decode whose media query
+	// matches, straight from the HTML, so the film starts loading before any
+	// script has run. Phones get the small encode: full 2K is wasted on a small
+	// screen and costs the most bandwidth. Judged by the screen's short side,
+	// since a large phone held sideways is wider than many laptops. With
+	// reduced motion nothing matches and nothing downloads; the page is a still.
+	const motion = '(prefers-reduced-motion: no-preference)';
+	const phone = `${motion} and (max-device-width: 600px), ${motion} and (max-device-height: 600px)`;
+	const small = media('/video/loop-720.mp4');
+	const h264 = 'video/mp4; codecs="avc1.64001f"';
+	const sources = [
+		[small, h264, phone],
+		[media('/video/loop-av1.mp4'), 'video/mp4; codecs="av01.0.08M.10"', motion],
+		[media('/video/loop-hevc.mp4'), 'video/mp4; codecs="hvc1.2.4.L120.B0"', motion],
+		[small, h264, motion]
 	];
 	const IDLE_MS = 2500;
 	// The title and controls hold a little longer the first time, as the film
@@ -19,10 +31,13 @@
 
 	let main: HTMLElement;
 	let video: IosVideo;
-	let src = $state('');
 	let paused = $state(true);
 	// Nothing shows until the film can play; then it fades up from black.
 	let ready = $state(false);
+	// Waiting on the network mid-film. The loader comes back only if the wait
+	// outlasts a moment, so a seek does not flash it.
+	let stalled = $state(false);
+	let stall: ReturnType<typeof setTimeout> | undefined;
 	let idle = $state(false);
 	let fullscreen = $state(false);
 	let progress = $state(0);
@@ -30,23 +45,31 @@
 
 	// Music is off until asked for: browsers only start sound from a gesture,
 	// and nobody wants a page that shouts. The track loads on first use.
-	const music = new Music('/audio/coalesce.m4a');
+	const music = new Music(media('/audio/coalesce.m4a'));
 	const VOLUME_KEY = 'coalesce:volume';
 	const SOUND_KEY = 'coalesce:sound';
 	let sound = $state(false);
 	let volume = $state(0.6);
 	let musicLoading = $state(false);
 
-	// Phones and Data Saver get the small encode: full 2K is wasted on a
-	// small screen and costs the most bandwidth. Judged by the screen's short
-	// side, since a large phone held sideways is wider than many laptops.
-	// Otherwise pick the first encode the browser can decode and the server has.
 	onMount(() => {
+		// The film began loading from the HTML before this ran: catch up on
+		// what it did meanwhile. With reduced motion there is nothing to wait
+		// for; with every source already failed, the poster is all there is.
+		paused = video.paused;
+		const failed =
+			video.networkState === video.NETWORK_NO_SOURCE &&
+			video.readyState === video.HAVE_NOTHING;
+		if (!matchMedia(motion).matches || failed) ready = true;
+		else if (!video.paused && video.readyState >= video.HAVE_FUTURE_DATA) ready = true;
+		else if (video.readyState >= video.HAVE_CURRENT_DATA) play();
+
+		// Data Saver asks for the small encode on any screen.
 		const saveData = (navigator as { connection?: { saveData?: boolean } }).connection
 			?.saveData;
-		const phone = Math.min(screen.width, screen.height) <= 600;
-		const candidates = phone || saveData ? [small] : full;
-		pick(candidates);
+		if (saveData && matchMedia(motion).matches && !video.currentSrc.endsWith(small)) {
+			video.src = small;
+		}
 
 		// A returning listener's volume, and whether they had sound on. Storage
 		// can be unavailable (private windows, blocked cookies); then defaults.
@@ -79,24 +102,18 @@
 			document.removeEventListener('fullscreenchange', onFullscreen);
 			cancelAnimationFrame(frame);
 			clearTimeout(timer);
+			clearTimeout(stall);
 		};
 	});
 
-	async function pick(candidates: string[][]) {
-		for (const [file, type] of candidates) {
-			if (!video.canPlayType(type)) continue;
-			const url = `${base}/${file}`;
-			try {
-				const head = await fetch(url, { method: 'HEAD' });
-				if (!head.ok) continue;
-			} catch {
-				continue;
-			}
-			src = url;
-			return;
-		}
-		// No encode to play: show the poster rather than wait on black.
-		ready = true;
+	function waiting() {
+		clearTimeout(stall);
+		stall = setTimeout(() => (stalled = true), 800);
+	}
+
+	function flowing() {
+		clearTimeout(stall);
+		stalled = false;
 	}
 
 	// Autoplay can be refused (Low Power Mode, browser policy). The video then
@@ -267,26 +284,43 @@
 	onclick={tap}
 	onpointermove={(e) => e.pointerType === 'mouse' && wake()}
 	role="presentation"
-	style="--hero: url({base}/hero.jpg)"
+	style="--hero: url({media('/video/hero.jpg')})"
 >
 	<video
 		bind:this={video}
 		class:ready
-		{src}
 		autoplay
 		muted
 		loop
 		playsinline
 		disablepictureinpicture
-		poster="{base}/poster.jpg"
+		poster={media('/video/poster.jpg')}
 		onloadeddata={play}
 		onplay={() => (paused = false)}
-		onplaying={() => (ready = true)}
+		onplaying={() => {
+			ready = true;
+			flowing();
+		}}
+		onwaiting={waiting}
 		onerror={() => (ready = true)}
-		onpause={() => (paused = true)}
-	></video>
+		onpause={() => {
+			paused = true;
+			flowing();
+		}}
+	>
+		{#each sources as [src, type, query], i (i)}
+			<!-- The last source failing means none could play: show the poster
+			     rather than wait on black. -->
+			<source
+				{src}
+				{type}
+				media={query}
+				onerror={i === sources.length - 1 ? () => (ready = true) : undefined}
+			/>
+		{/each}
+	</video>
 
-	<div class="loader" class:done={ready} aria-hidden="true"><span></span></div>
+	<div class="loader" class:done={ready && !stalled} aria-hidden="true"><span></span></div>
 
 	<p class="credit" class:shown>
 		Coalesce <span>·</span>
