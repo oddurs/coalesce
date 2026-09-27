@@ -71,6 +71,9 @@ pub fn write_png16(path: &Path, width: u32, height: u32, rgba: &[f32]) -> Result
     enc.set_color(png::ColorType::Rgb);
     enc.set_depth(png::BitDepth::Sixteen);
     enc.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    // Frames are intermediates for the encoder: a fast deflate writes a 4K
+    // frame in a fraction of the default's time for somewhat larger files.
+    enc.set_compression(png::Compression::Fast);
     let mut writer = enc.write_header().map_err(|e| e.to_string())?;
     let mut data = Vec::with_capacity(rgba.len() / 4 * 6);
     for p in rgba.as_chunks::<4>().0 {

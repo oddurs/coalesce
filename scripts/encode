@@ -1,41 +1,33 @@
 #!/bin/sh
-# Encode a frame directory into a ProRes master and web deliverables, with the
-# song under them when given: it starts at frame 0 and silence fills the loop.
-# usage: scripts/encode [frames-dir] [out-dir] [song.wav]
+# Encode the master into the web set, the song under each file from frame 0
+# with silence filling the loop: AV1 and HEVC at 2048 wide, H.264 at 720p for
+# phones and browsers without either, and the poster and reduced-motion
+# stills. The set is served from R2 (scripts/publish), so it is sized for
+# quality, not an upload cap: about VMAF 96 against the master. Check that on
+# a new master before publishing, as the 75 s set was checked.
+# usage: scripts/encode [master.mov] [song.wav] [out-dir]
 set -eu
 cd "$(dirname "$0")/.."
-frames=${1:-out/frames}/png
-out=${2:-out/video}
-song=${3:-}
+# Utility priority: the machine stays responsive for other work meanwhile.
+if command -v taskpolicy >/dev/null 2>&1; then low="taskpolicy -c utility"; else low="nice -n 10"; fi
+master=${1:-out/master.mov}
+song=${2:-out/song-master.wav}
+out=${3:-out/web}
 mkdir -p "$out"
-n=$(ls "$frames"/frame_*.png | wc -l | tr -d ' ')
-[ "$n" -eq 5280 ] || echo "warning: $n frames, expected 5280" >&2
-
-# Master: ProRes 4444, full-range 4:4:4 10-bit, no loss the eye can find, and
-# the song as it came.
-ffmpeg -y -loglevel error -stats -framerate 24 -i "$frames/frame_%04d.png" ${song:+-i "$song"} \
-  -c:v prores_ks -profile:v 4 -pix_fmt yuv444p10le -vendor apl0 \
-  -color_primaries bt709 -color_trc iec61966-2-1 -colorspace bt709 \
-  ${song:+-af apad -shortest -c:a pcm_s16le} \
-  "$out/master.mov"
-
-# Web: sized to ship inside a static deploy (Vercel Hobby caps an upload at
-# 100 MB, and the music shares it). Settings were chosen by VMAF against the
-# 75 s master: each file holds about 94, and the set comes to about 82 MB.
-# Capped at 2048 wide.
 fit="scale='min(2048,iw)':-2:flags=lanczos"
-ffmpeg -y -loglevel error -stats -i "$out/master.mov" -vf "$fit" \
-  -c:v libsvtav1 -preset 4 -crf 31 -pix_fmt yuv420p10le -g 48 -movflags +faststart -c:a aac -b:a 128k \
+audio="-map 0:v -map 1:a -af apad -shortest -c:a aac -b:a 160k"
+$low ffmpeg -y -loglevel error -stats -i "$master" -i "$song" -vf "$fit" \
+  -c:v libsvtav1 -preset 4 -crf 27 -pix_fmt yuv420p10le -g 48 $audio -movflags +faststart \
   "$out/loop-av1.mp4"
-ffmpeg -y -loglevel error -stats -i "$out/master.mov" -vf "$fit" \
-  -c:v libx265 -preset slow -crf 24 -pix_fmt yuv420p10le -tag:v hvc1 \
-  -x265-params "keyint=48:min-keyint=48:no-open-gop=1:log-level=error" -movflags +faststart -c:a aac -b:a 128k \
+$low ffmpeg -y -loglevel error -stats -i "$master" -i "$song" -vf "$fit" \
+  -c:v libx265 -preset slow -crf 22 -pix_fmt yuv420p10le -tag:v hvc1 \
+  -x265-params "keyint=48:min-keyint=48:no-open-gop=1:log-level=error" $audio -movflags +faststart \
   "$out/loop-hevc.mp4"
-# Phones, Data Saver and browsers without AV1 or HEVC.
-ffmpeg -y -loglevel error -stats -i "$out/master.mov" -vf scale=1280:-2:flags=lanczos \
-  -c:v libx264 -preset slow -crf 23 -pix_fmt yuv420p -g 48 -movflags +faststart -c:a aac -b:a 128k \
+$low ffmpeg -y -loglevel error -stats -i "$master" -i "$song" -vf scale=1280:-2:flags=lanczos \
+  -c:v libx264 -preset slow -crf 21 -pix_fmt yuv420p -g 48 $audio -movflags +faststart \
   "$out/loop-720.mp4"
-ffmpeg -y -loglevel error -i "$frames/frame_0000.png" -vf "$fit" -q:v 3 "$out/poster.jpg"
-# The still shown instead of the loop when motion is reduced: the edge-on dance.
-ffmpeg -y -loglevel error -i "$frames/frame_1728.png" -vf "$fit" -q:v 2 "$out/hero.jpg"
+$low ffmpeg -y -loglevel error -i "$master" -vf "$fit" -frames:v 1 -q:v 3 "$out/poster.jpg"
+# The still shown instead of the loop when motion is reduced: the edge-on
+# eclipse on bar 22.
+$low ffmpeg -y -loglevel error -ss 72.066 -i "$master" -vf "$fit" -frames:v 1 -q:v 2 "$out/hero.jpg"
 ls -la "$out"

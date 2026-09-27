@@ -65,7 +65,11 @@ pub const RINGDOWN_TAU: f32 = 1.1;
 /// one per two-bar phrase, sit about twelve units apart.
 const KEPLER: f32 = 20.4;
 /// The last stretch before coalescence, when the pair plunges together.
-const PLUNGE: f32 = 0.8;
+const PLUNGE: f32 = 1.2;
+/// Closest the pair comes before the plunge. Their shadows just touch here,
+/// so the fastest passes read as two holes whirling round each other rather
+/// than one wobbling shadow.
+const SPIN_FLOOR: f32 = 4.2;
 
 /// Visual speed of gravitational-wave ripples, scene units per loop second.
 pub const GW_SPEED: f32 = 13.0;
@@ -293,11 +297,12 @@ pub fn kepler_rate(d: f32) -> f32 {
     KEPLER * d.abs().max(0.5).powf(-1.5)
 }
 
-/// Separation of the two bodies: Kepler's radius for the orbit's rate, with a
-/// last plunge to contact, then a damped quasi-normal wobble.
+/// Separation of the two bodies: Kepler's radius for the orbit's rate, held
+/// at `SPIN_FLOOR` through the fastest passes, with a last plunge to contact,
+/// then a damped quasi-normal wobble.
 pub fn separation(tau: f32) -> f32 {
     if tau < T_COALESCE {
-        let kepler = (KEPLER / orbital_rate(tau)).powf(2.0 / 3.0);
+        let kepler = (KEPLER / orbital_rate(tau)).powf(2.0 / 3.0).max(SPIN_FLOOR);
         kepler * ((T_COALESCE - tau) / PLUNGE).clamp(0.0, 1.0).powf(0.25)
     } else {
         let s = tau - T_COALESCE;
@@ -330,13 +335,13 @@ pub fn dissolve(t: f32) -> f32 {
 }
 
 /// Merger flash: the shocked mini-disks light up in the first moments after
-/// coalescence. Peaks a few frames in, gone within two seconds.
+/// coalescence. Peaks within a frame of the downbeat, gone within two seconds.
 pub fn flash(tau: f32) -> f32 {
     let s = tau - T_COALESCE;
     if !(0.0..2.5).contains(&s) {
         return 0.0;
     }
-    smoothstep(0.0, 0.12, s) * (-s / 0.45).exp()
+    smoothstep(0.0, 0.04, s) * (-s / 0.45).exp()
 }
 
 /// Camera jolt at the merger: a short decaying rattle, zero elsewhere.
@@ -631,7 +636,9 @@ pub fn frame_at(t: f32, tau: f32) -> Frame {
         let disk_inner = 3.0 * rs;
         let tidal = 0.36 * d.abs();
         let disk_outer = tidal.max(disk_inner * 1.25);
-        let strip = smoothstep(3.0, 6.0, d.abs());
+        // The disks burn to the end of the plunge: the song's riser climbs to
+        // the merger, and the frame must not go dark under it.
+        let strip = smoothstep(1.0, 3.0, d.abs());
         // Tidal heating: the closer the pair, the harder the disks are stirred.
         let squeeze = (1.0 - d.abs() / D0).clamp(0.0, 1.0);
         let heat = 1.0 + 1.5 * squeeze * squeeze;

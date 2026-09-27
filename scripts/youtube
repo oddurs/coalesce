@@ -1,0 +1,24 @@
+#!/bin/sh
+# The YouTube upload: the loop played once at full resolution with the song
+# under it, fading in from black and out to it. 4096x2160 so YouTube gives it
+# its 4K encode, which looks better at every size; the 1.90:1 frame sits in
+# its player with thin bars. H.264 High at near-transparent quality with the
+# grain kept, AAC at 384 kbps, BT.709 throughout, as YouTube asks.
+# usage: scripts/youtube [master.mov] [song.wav] [out.mp4]
+set -eu
+cd "$(dirname "$0")/.."
+# Utility priority: the machine stays responsive for other work meanwhile.
+if command -v taskpolicy >/dev/null 2>&1; then low="taskpolicy -c utility"; else low="nice -n 10"; fi
+master=${1:-out/master.mov}
+song=${2:-out/song-master.wav}
+out=${3:-out/youtube/coalesce.mp4}
+length=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$master")
+end=$(awk -v l="$length" 'BEGIN { print l - 0.5 }')
+mkdir -p "$(dirname "$out")"
+$low ffmpeg -y -loglevel error -stats -i "$master" -i "$song" -map 0:v -map 1:a \
+  -vf "fade=t=in:st=0:d=0.5,fade=t=out:st=$end:d=0.5,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p" \
+  -af apad -shortest \
+  -c:v libx264 -preset slow -crf 14 -tune grain -profile:v high -g 12 -bf 2 \
+  -color_primaries bt709 -color_trc bt709 -colorspace bt709 \
+  -c:a aac -b:a 384k -ar 48000 -movflags +faststart "$out"
+ls -la "$out"
