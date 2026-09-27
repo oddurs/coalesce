@@ -53,9 +53,10 @@ served as a fullscreen video by a SvelteKit site.
   under content-hashed names and rewrites `web/src/lib/media.json`. Commit the manifest through a
   PR, then deploy from `web/` with `vercel deploy --prod`. Old media stays on R2, so earlier
   deploys and rollbacks keep playing.
-- R2 setup, once: `npx wrangler login`, `npx wrangler r2 bucket create coalesce-media`, and
-  media.oddurs.com attached to the bucket as a custom domain (R2, bucket, Settings, Custom
-  Domains). Media is cached for a year: never overwrite a published key.
+- R2 is set up: bucket `coalesce-media` in the personal Cloudflare account (the login also sees
+  MayStar Consulting, so the script pins the account), media.oddurs.com attached as its custom
+  domain (zone `4b419085f866dc381c4fbace9f7281eb`), TLS 1.2 minimum. It needs `npx wrangler
+  login` on a new machine. Media is cached for a year: never overwrite a published key.
 - The `<source>` list is in the page's HTML, so the video starts loading before any script runs.
   Phones, reduced motion and codec choice are media queries and types there, not script. The
   sound is the film's own track, muted until the viewer asks for it.
