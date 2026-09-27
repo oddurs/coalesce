@@ -1,0 +1,23 @@
+#!/bin/sh
+# Build the background music for the site: crossfade the track's last seconds
+# into its first so it loops without a seam, then encode AAC.
+# usage: scripts/music <track.wav> [out.m4a]
+set -eu
+cd "$(dirname "$0")/.."
+in=${1:?usage: scripts/music <track.wav> [out.m4a]}
+out=${2:-web/static/audio/coalesce.m4a}
+x=4
+len=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$in")
+end=$(awk -v l="$len" -v x="$x" 'BEGIN { print l - x }')
+# Apple's AAC encoder where ffmpeg has it; the built-in one elsewhere.
+enc=aac
+ffmpeg -hide_banner -encoders 2>/dev/null | grep -q aac_at && enc=aac_at
+mkdir -p "$(dirname "$out")"
+ffmpeg -y -loglevel error -i "$in" -filter_complex "\
+[0]atrim=0:${x},asetpts=PTS-STARTPTS[head];\
+[0]atrim=start=${end},asetpts=PTS-STARTPTS[tail];\
+[head][tail]amix=inputs=2:normalize=0[seam];\
+[0]atrim=start=${x}:end=${end},asetpts=PTS-STARTPTS[body];\
+[seam][body]concat=n=2:v=0:a=1[out]" \
+  -map "[out]" -c:a "$enc" -b:a 128k -movflags +faststart "$out"
+ls -la "$out"
