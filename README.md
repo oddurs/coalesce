@@ -63,7 +63,10 @@ tracing again. Render output lives in `out/` and is never committed.
 
 ## The site
 
-`web/` is a SvelteKit site built as static files: one page, a minimal player, and the video.
+`web/` is a SvelteKit site built as static files: one page, a minimal player, the video and
+optional background music. The music is off until a visitor turns it on, loads only then, and
+loops without a seam through Web Audio. `scripts/music <track.wav>` builds it: the track's last
+four seconds are crossfaded into its first, then encoded to AAC in `web/static/audio`.
 `scripts/encode` writes the web set (AV1 and 10-bit HEVC at 2K, H.264 at 720p for phones),
 each tuned to a VMAF of about 95 against the master. Copy it into `web/static/video` and
 deploy from `web/` with the Vercel CLI; see `CLAUDE.md` for the details.

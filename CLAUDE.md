@@ -40,6 +40,8 @@ served as a fullscreen video by a SvelteKit site.
 - The site is a static build (`adapter-static`, one prerendered page) and ships with its video.
 - `scripts/encode <frames-dir> <out-dir>` writes the master and the web set: `loop-av1.mp4`,
   `loop-hevc.mp4`, `loop-720.mp4`, `poster.jpg`, `hero.jpg`. Copy the web set into `web/static/video`.
+- `scripts/music <track.wav>` writes the looped music to `web/static/audio/coalesce.m4a`, also
+  gitignored and also part of the upload budget (about 3.4 MB).
 - Deploy from `web/` with the Vercel CLI: `vercel deploy` (preview) or `vercel deploy --prod`. The CLI
   uploads the gitignored video; a Git-connected build would not have it. Keep the upload under Vercel
   Hobby's 100 MB: the 2K web set is about 81 MB.

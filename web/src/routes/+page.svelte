@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
+	import { Music } from '$lib/music';
 
 	// The web encodes from scripts/encode ship with the site under /video.
 	const base = '/video';
@@ -27,6 +28,15 @@
 	let progress = $state(0);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
+	// Music is off until asked for: browsers only start sound from a gesture,
+	// and nobody wants a page that shouts. The track loads on first use.
+	const music = new Music('/audio/coalesce.m4a');
+	const VOLUME_KEY = 'coalesce:volume';
+	const SOUND_KEY = 'coalesce:sound';
+	let sound = $state(false);
+	let volume = $state(0.6);
+	let musicLoading = $state(false);
+
 	// Phones and Data Saver get the small encode: full 2K is wasted on a
 	// small screen and costs the most bandwidth. Judged by the screen's short
 	// side, since a large phone held sideways is wider than many laptops.
@@ -38,6 +48,25 @@
 		const candidates = phone || saveData ? [small] : full;
 		pick(candidates);
 
+		// A returning listener's volume, and whether they had sound on. Storage
+		// can be unavailable (private windows, blocked cookies); then defaults.
+		let wanted = false;
+		try {
+			const saved = Number(localStorage.getItem(VOLUME_KEY));
+			if (saved > 0 && saved <= 1) volume = saved;
+			wanted = localStorage.getItem(SOUND_KEY) === '1';
+		} catch {
+			wanted = false;
+		}
+		// Sound needs a gesture, so it comes back on the first tap or key.
+		const resume = () => {
+			if (wanted && !sound) startSound();
+		};
+		if (wanted) {
+			window.addEventListener('pointerdown', resume, { once: true });
+			window.addEventListener('keydown', resume, { once: true });
+		}
+
 		const onFullscreen = () => (fullscreen = document.fullscreenElement !== null);
 		document.addEventListener('fullscreenchange', onFullscreen);
 		let frame = requestAnimationFrame(function tick() {
@@ -45,6 +74,8 @@
 			frame = requestAnimationFrame(tick);
 		});
 		return () => {
+			window.removeEventListener('pointerdown', resume);
+			window.removeEventListener('keydown', resume);
 			document.removeEventListener('fullscreenchange', onFullscreen);
 			cancelAnimationFrame(frame);
 			clearTimeout(timer);
@@ -127,6 +158,61 @@
 		wake();
 	}
 
+	function remember() {
+		try {
+			localStorage.setItem(VOLUME_KEY, String(volume));
+			localStorage.setItem(SOUND_KEY, sound ? '1' : '0');
+		} catch {
+			// Not remembering is fine; the page works the same without storage.
+		}
+	}
+
+	async function startSound() {
+		sound = true;
+		if (volume === 0) volume = 0.6;
+		remember();
+		musicLoading = true;
+		try {
+			await music.play(paused ? 0 : volume);
+		} catch {
+			// The track failed to load or decode: stay silent, show sound off.
+			sound = false;
+		}
+		musicLoading = false;
+	}
+
+	function stopSound() {
+		sound = false;
+		remember();
+		music.stop();
+	}
+
+	function toggleSound() {
+		wake();
+		if (sound) stopSound();
+		else startSound();
+	}
+
+	function onVolume(event: Event) {
+		volume = Number((event.currentTarget as HTMLInputElement).value);
+		wake();
+		if (volume === 0) {
+			if (sound) stopSound();
+		} else if (!sound) startSound();
+		else {
+			music.set(volume);
+			remember();
+		}
+	}
+
+	// The music breathes with the film: it fades out on pause and back in on
+	// play. Volume is read untracked, or every slider step would re-fade.
+	$effect(() => {
+		if (!sound || musicLoading) return;
+		if (paused) music.stop();
+		else music.play(untrack(() => volume)).catch(() => (sound = false));
+	});
+
 	async function toggleFullscreen() {
 		wake();
 		if (document.fullscreenElement) {
@@ -154,6 +240,8 @@
 			toggle();
 		} else if (event.key === 'f') {
 			toggleFullscreen();
+		} else if (event.key === 'm') {
+			toggleSound();
 		} else {
 			wake();
 		}
@@ -241,6 +329,33 @@
 			aria-valuenow={Math.round(progress * 100)}
 		>
 			<div class="fill" style:transform="scaleX({progress})"></div>
+		</div>
+		<div class="volume" class:on={sound}>
+			<button
+				onclick={toggleSound}
+				class:loading={musicLoading}
+				aria-label={sound ? 'Mute music' : 'Play music'}
+				aria-pressed={sound}
+			>
+				<svg viewBox="0 0 24 24" class="stroke">
+					<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" />
+					{#if sound}
+						<path d="M15.5 9.2a4 4 0 0 1 0 5.6M18.2 6.6a7.6 7.6 0 0 1 0 10.8" />
+					{:else}
+						<path d="M16 9.8l4.4 4.4M20.4 9.8L16 14.2" />
+					{/if}
+				</svg>
+			</button>
+			<input
+				type="range"
+				min="0"
+				max="1"
+				step="0.01"
+				value={sound ? volume : 0}
+				oninput={onVolume}
+				aria-label="Music volume"
+				style:--level={sound ? volume : 0}
+			/>
 		</div>
 		<button
 			onclick={toggleFullscreen}
@@ -422,6 +537,85 @@
 		stroke-linecap: round;
 		stroke-linejoin: round;
 	}
+	/* Volume: the slider slides out beside the speaker on hover or focus, and
+	   stays out on touch screens, where there is no hover. */
+	.volume {
+		flex: none;
+		display: flex;
+		align-items: center;
+	}
+	.volume input {
+		width: 0;
+		opacity: 0;
+		margin: 0;
+		transition:
+			width 0.3s ease,
+			opacity 0.3s ease,
+			margin 0.3s ease;
+	}
+	.volume:hover input,
+	.volume:focus-within input {
+		width: 4.5rem;
+		opacity: 1;
+		margin-right: 0.35rem;
+	}
+	@media (hover: none) {
+		.volume input {
+			width: 4rem;
+			opacity: 1;
+			margin-right: 0.3rem;
+		}
+	}
+	button.loading svg {
+		animation: breathe 1.8s ease-in-out infinite;
+	}
+	input[type='range'] {
+		-webkit-appearance: none;
+		appearance: none;
+		height: 1.75rem;
+		background: transparent;
+		cursor: pointer;
+	}
+	input[type='range']::-webkit-slider-runnable-track {
+		height: 3px;
+		border-radius: 3px;
+		background: linear-gradient(
+			to right,
+			#fff calc(var(--level) * 100%),
+			rgba(255, 255, 255, 0.28) 0
+		);
+	}
+	input[type='range']::-webkit-slider-thumb {
+		-webkit-appearance: none;
+		width: 12px;
+		height: 12px;
+		margin-top: -4.5px;
+		border-radius: 50%;
+		background: #fff;
+	}
+	input[type='range']::-moz-range-track {
+		height: 3px;
+		border-radius: 3px;
+		background: rgba(255, 255, 255, 0.28);
+	}
+	input[type='range']::-moz-range-progress {
+		height: 3px;
+		border-radius: 3px;
+		background: #fff;
+	}
+	input[type='range']::-moz-range-thumb {
+		width: 12px;
+		height: 12px;
+		border: 0;
+		border-radius: 50%;
+		background: #fff;
+	}
+	input[type='range']:focus-visible {
+		outline: 2px solid rgba(255, 255, 255, 0.8);
+		outline-offset: 2px;
+		border-radius: 4px;
+	}
+
 	/* A tall hit area around a hairline, so it is easy to tap. */
 	.track {
 		flex: 1;
