@@ -45,7 +45,8 @@
 
 	// Music is off until asked for: browsers only start sound from a gesture,
 	// and nobody wants a page that shouts. The track loads on first use.
-	const music = new Music(media('/audio/coalesce.m4a'), media('/audio/coalesce-head.m4a'));
+	const opening = media('/audio/coalesce-head.m4a');
+	const music = new Music(media('/audio/coalesce.m4a'), opening);
 	const VOLUME_KEY = 'coalesce:volume';
 	const SOUND_KEY = 'coalesce:sound';
 	let sound = $state(false);
@@ -86,10 +87,11 @@
 			if (wanted && !sound) startSound();
 		};
 		if (wanted) {
-			music.prefetch();
 			window.addEventListener('pointerdown', resume, { once: true });
 			window.addEventListener('keydown', resume, { once: true });
 		}
+
+		music.prefetch();
 
 		const onFullscreen = () => (fullscreen = document.fullscreenElement !== null);
 		document.addEventListener('fullscreenchange', onFullscreen);
@@ -146,14 +148,6 @@
 	// on a slow load it would otherwise run out while still on black.
 	$effect(() => {
 		if (ready) wake(INTRO_MS);
-	});
-
-	// Once the film is under way, fetch the music's opening quietly, so a tap
-	// on sound starts it at once rather than after a download.
-	$effect(() => {
-		if (!ready) return;
-		const later = setTimeout(() => music.prefetch(), 2000);
-		return () => clearTimeout(later);
 	});
 
 	// A tap on the picture shows the controls, or hides them if they are up.
@@ -283,6 +277,10 @@
 		content="Two black holes spiral together and become one. A seventy-five second loop by Oddur Sigurdsson."
 	/>
 	<meta name="theme-color" content="#000000" />
+	<!-- The music's opening, fetched before the film's download fills the
+	     connection: once that starts, anything else from this site waits
+	     seconds behind it, and a tap on sound should play at once. -->
+	<link rel="preload" href={opening} as="fetch" crossorigin="anonymous" />
 </svelte:head>
 
 <svelte:window onkeydown={key} />
