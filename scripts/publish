@@ -11,6 +11,9 @@ cd "$(dirname "$0")/.."
 dir=${1:-out/web}
 bucket=coalesce-media
 origin=https://media.oddurs.com
+# The personal account, which holds the bucket and the oddurs.com zone; the
+# login can see more than one.
+export CLOUDFLARE_ACCOUNT_ID=791fe221f1fbcef5e116b99da50dab00
 manifest=web/src/lib/media.json
 entries=""
 for name in loop-av1.mp4 loop-hevc.mp4 loop-720.mp4 poster.jpg hero.jpg; do
