@@ -7,7 +7,7 @@ Two black holes spiral together and become one: a binary black hole inspiral, me
 ringdown, rendered as a seamless 75 second loop in the 1.90:1 frame, and the small site that
 plays it.
 
-**Watch it:** https://black-hole-ten-liard.vercel.app
+**Watch it:** https://coalesce.oddurs.com
 
 ## How it is made
 
