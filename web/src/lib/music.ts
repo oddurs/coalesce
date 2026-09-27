@@ -33,9 +33,12 @@ export class Music {
 		private readonly headUrl: string
 	) {}
 
-	/** Fetch the opening ahead of any click, at low priority. Safe to call again. */
+	/**
+	 * Take the opening ahead of any click. The page preloads it from the HTML,
+	 * so this picks up that response. Safe to call again.
+	 */
 	prefetch(): void {
-		this.opening ??= bytes(this.headUrl, 'low');
+		this.opening ??= bytes(this.headUrl);
 		// A failed prefetch surfaces in load(), which falls back to the whole track.
 		this.opening.catch(() => {});
 	}
@@ -97,7 +100,7 @@ export class Music {
 	/** Resolves once sound is playing: the opening, or the whole track without one. */
 	private async load(ctx: AudioContext, gain: GainNode): Promise<void> {
 		this.prefetch();
-		const whole = bytes(this.url, 'high').then((data) => ctx.decodeAudioData(data));
+		const whole = bytes(this.url).then((data) => ctx.decodeAudioData(data));
 		let opening: Loop;
 		try {
 			opening = loop(ctx, gain, await ctx.decodeAudioData(await this.opening!), 0);
@@ -114,8 +117,8 @@ export class Music {
 	}
 }
 
-async function bytes(url: string, priority: RequestPriority): Promise<ArrayBuffer> {
-	const response = await fetch(url, { priority });
+async function bytes(url: string): Promise<ArrayBuffer> {
+	const response = await fetch(url);
 	if (!response.ok) throw new Error(`music: ${response.status} for ${url}`);
 	return response.arrayBuffer();
 }
