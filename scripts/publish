@@ -1,0 +1,37 @@
+#!/bin/sh
+# Publish the web set to Cloudflare R2, served at media.oddurs.com, under names
+# that carry a hash of their content, then write web/src/lib/media.json, which
+# the site reads. Browsers cache each file for a year; a new encode gets new
+# names, and old files stay so earlier deploys keep playing. Commit the
+# manifest and deploy the site after this.
+# Needs `npx wrangler login` once, and the bucket and domain set up (CLAUDE.md).
+# usage: scripts/publish [web-dir]
+set -eu
+cd "$(dirname "$0")/.."
+dir=${1:-out/web}
+bucket=coalesce-media
+origin=https://media.oddurs.com
+# The personal account, which holds the bucket and the oddurs.com zone; the
+# login can see more than one.
+export CLOUDFLARE_ACCOUNT_ID=791fe221f1fbcef5e116b99da50dab00
+manifest=web/src/lib/media.json
+entries=""
+for name in loop-av1.mp4 loop-hevc.mp4 loop-720.mp4 poster.jpg hero.jpg; do
+  hash=$(shasum -a 256 "$dir/$name" | cut -c1-12)
+  key="video/${name%.*}.$hash.${name##*.}"
+  case "$name" in
+    *.mp4) type=video/mp4 ;;
+    *.jpg) type=image/jpeg ;;
+  esac
+  npx --yes wrangler@4 r2 object put "$bucket/$key" --remote --file "$dir/$name" \
+    --content-type "$type" --cache-control "public, max-age=31536000, immutable"
+  status=$(curl -s -o /dev/null -w '%{http_code}' -r 0-0 "$origin/$key")
+  case "$status" in
+    200 | 206) ;;
+    *) echo "publish: $origin/$key answered $status" >&2; exit 1 ;;
+  esac
+  entries="$entries${entries:+,
+}		\"$name\": \"$key\""
+done
+printf '{\n\t"origin": "%s",\n\t"files": {\n%s\n\t}\n}\n' "$origin" "$entries" > "$manifest"
+cat "$manifest"

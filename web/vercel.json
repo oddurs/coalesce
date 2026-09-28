@@ -3,37 +3,5 @@
 	"framework": null,
 	"installCommand": "pnpm install --frozen-lockfile",
 	"buildCommand": "pnpm build",
-	"outputDirectory": "build",
-	"headers": [
-		{
-			"source": "/(video|audio)/(.*)",
-			"has": [
-				{
-					"type": "query",
-					"key": "v"
-				}
-			],
-			"headers": [
-				{
-					"key": "Cache-Control",
-					"value": "public, max-age=31536000, immutable"
-				}
-			]
-		},
-		{
-			"source": "/(video|audio)/(.*)",
-			"missing": [
-				{
-					"type": "query",
-					"key": "v"
-				}
-			],
-			"headers": [
-				{
-					"key": "Cache-Control",
-					"value": "public, max-age=86400, stale-while-revalidate=604800"
-				}
-			]
-		}
-	]
+	"outputDirectory": "build"
 }

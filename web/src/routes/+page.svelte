@@ -1,10 +1,11 @@
 <script lang="ts">
-	import { onMount, untrack } from 'svelte';
-	import { Music } from '$lib/music';
+	import { onMount } from 'svelte';
+	import manifest from '$lib/media.json';
 
-	// The web encodes from scripts/encode ship with the site under /video.
-	const versions = __MEDIA__;
-	const media = (path: string) => (versions[path] ? `${path}?v=${versions[path]}` : path);
+	// The web set lives on R2 under names that carry a hash of the content;
+	// scripts/publish uploads it and writes the manifest this reads.
+	const files: Record<string, string> = manifest.files;
+	const media = (name: string) => `${manifest.origin}/${files[name]}`;
 
 	// The browser picks the first source it can decode whose media query
 	// matches, straight from the HTML, so the film starts loading before any
@@ -14,12 +15,12 @@
 	// reduced motion nothing matches and nothing downloads; the page is a still.
 	const motion = '(prefers-reduced-motion: no-preference)';
 	const phone = `${motion} and (max-device-width: 600px), ${motion} and (max-device-height: 600px)`;
-	const small = media('/video/loop-720.mp4');
+	const small = media('loop-720.mp4');
 	const h264 = 'video/mp4; codecs="avc1.64001f"';
 	const sources = [
 		[small, h264, phone],
-		[media('/video/loop-av1.mp4'), 'video/mp4; codecs="av01.0.08M.10"', motion],
-		[media('/video/loop-hevc.mp4'), 'video/mp4; codecs="hvc1.2.4.L120.B0"', motion],
+		[media('loop-av1.mp4'), 'video/mp4; codecs="av01.0.08M.10"', motion],
+		[media('loop-hevc.mp4'), 'video/mp4; codecs="hvc1.2.4.L120.B0"', motion],
 		[small, h264, motion]
 	];
 	const IDLE_MS = 2500;
@@ -43,15 +44,16 @@
 	let progress = $state(0);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
-	// Music is off until asked for: browsers only start sound from a gesture,
-	// and nobody wants a page that shouts. The track loads on first use.
-	const opening = media('/audio/coalesce-head.m4a');
-	const music = new Music(media('/audio/coalesce.m4a'), opening);
+	// The film carries its score. It plays muted until asked: browsers only
+	// start sound from a gesture, and nobody wants a page that shouts.
 	const VOLUME_KEY = 'coalesce:volume';
 	const SOUND_KEY = 'coalesce:sound';
 	let sound = $state(false);
 	let volume = $state(0.5);
-	let musicLoading = $state(false);
+	// iPhone gives script no say over a video's volume; its buttons own it.
+	// There the slider is hidden and the speaker only mutes.
+	let fixedVolume = $state(false);
+	let ramp = 0;
 
 	onMount(() => {
 		// The film began loading from the HTML before this ran: catch up on
@@ -91,7 +93,8 @@
 			window.addEventListener('keydown', resume, { once: true });
 		}
 
-		music.prefetch();
+		video.volume = 0.5;
+		fixedVolume = video.volume !== 0.5;
 
 		const onFullscreen = () => (fullscreen = document.fullscreenElement !== null);
 		document.addEventListener('fullscreenchange', onFullscreen);
@@ -104,6 +107,7 @@
 			window.removeEventListener('keydown', resume);
 			document.removeEventListener('fullscreenchange', onFullscreen);
 			cancelAnimationFrame(frame);
+			cancelAnimationFrame(ramp);
 			clearTimeout(timer);
 			clearTimeout(stall);
 		};
@@ -187,24 +191,36 @@
 		}
 	}
 
-	async function startSound() {
+	/** Slider position to loudness: we hear loudness roughly as the square. */
+	const gainOf = (v: number) => v * v;
+
+	/** Glide the film's volume to `to` over `seconds`, then run `done`. */
+	function glide(to: number, seconds: number, done?: () => void) {
+		cancelAnimationFrame(ramp);
+		const from = video.volume;
+		const start = performance.now();
+		ramp = requestAnimationFrame(function step(now) {
+			const k = Math.min((now - start) / (seconds * 1000), 1);
+			video.volume = from + (to - from) * k * k * (3 - 2 * k);
+			if (k < 1) ramp = requestAnimationFrame(step);
+			else done?.();
+		});
+	}
+
+	function startSound() {
 		sound = true;
 		if (volume === 0) volume = 0.5;
 		remember();
-		musicLoading = true;
-		try {
-			await music.play(paused ? 0 : volume);
-		} catch {
-			// The track failed to load or decode: stay silent, show sound off.
-			sound = false;
-		}
-		musicLoading = false;
+		// Sound swells in rather than cutting in.
+		video.volume = 0;
+		video.muted = false;
+		glide(gainOf(volume), 0.6);
 	}
 
 	function stopSound() {
 		sound = false;
 		remember();
-		music.stop();
+		glide(0, 0.3, () => (video.muted = true));
 	}
 
 	function toggleSound() {
@@ -220,18 +236,11 @@
 			if (sound) stopSound();
 		} else if (!sound) startSound();
 		else {
-			music.set(volume);
+			cancelAnimationFrame(ramp);
+			video.volume = gainOf(volume);
 			remember();
 		}
 	}
-
-	// The music breathes with the film: it fades out on pause and back in on
-	// play. Volume is read untracked, or every slider step would re-fade.
-	$effect(() => {
-		if (!sound || musicLoading) return;
-		if (paused) music.stop();
-		else music.play(untrack(() => volume)).catch(() => (sound = false));
-	});
 
 	async function toggleFullscreen() {
 		wake();
@@ -274,13 +283,9 @@
 	<title>Coalesce</title>
 	<meta
 		name="description"
-		content="Two black holes spiral together and become one. A seventy-five second loop by Oddur Sigurdsson."
+		content="Two black holes spiral together and become one, scored to its song. A film by Oddur Sigurdsson."
 	/>
 	<meta name="theme-color" content="#000000" />
-	<!-- The music's opening, fetched before the film's download fills the
-	     connection: once that starts, anything else from this site waits
-	     seconds behind it, and a tap on sound should play at once. -->
-	<link rel="preload" href={opening} as="fetch" crossorigin="anonymous" />
 </svelte:head>
 
 <svelte:window onkeydown={key} />
@@ -291,7 +296,7 @@
 	onclick={tap}
 	onpointermove={(e) => e.pointerType === 'mouse' && wake()}
 	role="presentation"
-	style="--hero: url({media('/video/hero.jpg')})"
+	style="--hero: url({media('hero.jpg')})"
 >
 	<video
 		bind:this={video}
@@ -301,7 +306,7 @@
 		loop
 		playsinline
 		disablepictureinpicture
-		poster={media('/video/poster.jpg')}
+		poster={media('poster.jpg')}
 		onloadeddata={play}
 		onplay={() => (paused = false)}
 		onplaying={() => {
@@ -371,11 +376,10 @@
 		>
 			<div class="fill" style:transform="scaleX({progress})"></div>
 		</div>
-		<div class="volume" class:on={sound}>
+		<div class="volume" class:on={sound} class:fixed={fixedVolume}>
 			<button
 				onclick={toggleSound}
-				class:loading={musicLoading}
-				aria-label={sound ? 'Mute music' : 'Play music'}
+				aria-label={sound ? 'Mute' : 'Sound on'}
 				aria-pressed={sound}
 			>
 				<svg viewBox="0 0 24 24" class="stroke">
@@ -394,7 +398,7 @@
 				step="0.01"
 				value={sound ? volume : 0}
 				oninput={onVolume}
-				aria-label="Music volume"
+				aria-label="Volume"
 				style:--level={sound ? volume : 0}
 			/>
 		</div>
@@ -607,8 +611,8 @@
 			margin-right: 0.3rem;
 		}
 	}
-	button.loading svg {
-		animation: breathe 1.8s ease-in-out infinite;
+	.volume.fixed input {
+		display: none;
 	}
 	input[type='range'] {
 		-webkit-appearance: none;
