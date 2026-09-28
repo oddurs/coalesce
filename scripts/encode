@@ -11,23 +11,32 @@ cd "$(dirname "$0")/.."
 # Utility priority: the machine stays responsive for other work meanwhile.
 if command -v taskpolicy >/dev/null 2>&1; then low="taskpolicy -c utility"; else low="nice -n 10"; fi
 master=${1:-out/master.mov}
+# The master, or the list of chunks scripts/render would join into it: read in
+# sequence, they are the same film without a second copy on disk.
+case "$master" in
+  *.txt) src="-f concat -safe 0 -i $master" ;;
+  *) src="-i $master" ;;
+esac
 song=${2:-out/song-master.wav}
 out=${3:-out/web}
 mkdir -p "$out"
-fit="scale='min(2048,iw)':-2:flags=lanczos"
+# The frames' own tags, set on the frames: read from a chunk list they are
+# lost, and untagged video leaves each browser to guess the tone curve.
+tags="setparams=color_primaries=bt709:color_trc=iec61966-2-1:colorspace=bt709"
+fit="scale='min(2048,iw)':-2:flags=lanczos,$tags"
 audio="-map 0:v -map 1:a -af apad -shortest -c:a aac -b:a 160k"
-$low ffmpeg -y -loglevel error -stats -i "$master" -i "$song" -vf "$fit" \
+$low ffmpeg -y -loglevel error -stats $src -i "$song" -vf "$fit" \
   -c:v libsvtav1 -preset 4 -crf 27 -pix_fmt yuv420p10le -g 48 $audio -movflags +faststart \
   "$out/loop-av1.mp4"
-$low ffmpeg -y -loglevel error -stats -i "$master" -i "$song" -vf "$fit" \
+$low ffmpeg -y -loglevel error -stats $src -i "$song" -vf "$fit" \
   -c:v libx265 -preset slow -crf 22 -pix_fmt yuv420p10le -tag:v hvc1 \
   -x265-params "keyint=48:min-keyint=48:no-open-gop=1:log-level=error" $audio -movflags +faststart \
   "$out/loop-hevc.mp4"
-$low ffmpeg -y -loglevel error -stats -i "$master" -i "$song" -vf scale=1280:-2:flags=lanczos \
+$low ffmpeg -y -loglevel error -stats $src -i "$song" -vf "scale=1280:-2:flags=lanczos,$tags" \
   -c:v libx264 -preset slow -crf 21 -pix_fmt yuv420p -g 48 $audio -movflags +faststart \
   "$out/loop-720.mp4"
-$low ffmpeg -y -loglevel error -i "$master" -vf "$fit" -frames:v 1 -q:v 3 "$out/poster.jpg"
+$low ffmpeg -y -loglevel error $src -vf "$fit" -frames:v 1 -q:v 3 "$out/poster.jpg"
 # The still shown instead of the loop when motion is reduced: the edge-on
 # eclipse on bar 22.
-$low ffmpeg -y -loglevel error -ss 72.066 -i "$master" -vf "$fit" -frames:v 1 -q:v 2 "$out/hero.jpg"
+$low ffmpeg -y -loglevel error -ss 72.066 $src -vf "$fit" -frames:v 1 -q:v 2 "$out/hero.jpg"
 ls -la "$out"

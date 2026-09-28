@@ -10,12 +10,18 @@ cd "$(dirname "$0")/.."
 # Utility priority: the machine stays responsive for other work meanwhile.
 if command -v taskpolicy >/dev/null 2>&1; then low="taskpolicy -c utility"; else low="nice -n 10"; fi
 master=${1:-out/master.mov}
+# The master, or the list of chunks scripts/render would join into it: read in
+# sequence, they are the same film without a second copy on disk.
+case "$master" in
+  *.txt) src="-f concat -safe 0 -i $master" ;;
+  *) src="-i $master" ;;
+esac
 song=${2:-out/song-master.wav}
 out=${3:-out/youtube/coalesce.mp4}
-length=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$master")
-end=$(awk -v l="$length" 'BEGIN { print l - 0.5 }')
+frames=$(ffprobe -v error $src -count_packets -show_entries stream=nb_read_packets -of csv=p=0)
+end=$(awk -v n="$frames" 'BEGIN { print n / 24 - 0.5 }')
 mkdir -p "$(dirname "$out")"
-$low ffmpeg -y -loglevel error -stats -i "$master" -i "$song" -map 0:v -map 1:a \
+$low ffmpeg -y -loglevel error -stats $src -i "$song" -map 0:v -map 1:a \
   -vf "fade=t=in:st=0:d=0.5,fade=t=out:st=$end:d=0.5,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,format=yuv420p" \
   -af apad -shortest \
   -c:v libx264 -preset slow -crf 14 -tune grain -profile:v high -g 12 -bf 2 \
