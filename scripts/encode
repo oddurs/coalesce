@@ -3,8 +3,9 @@
 # with silence filling the loop: AV1 and HEVC at 2048 wide, H.264 at 720p for
 # phones and browsers without either, and the poster and reduced-motion
 # stills. The set is served from R2 (scripts/publish), so it is sized for
-# quality, not an upload cap: about VMAF 96 against the master. Check that on
-# a new master before publishing, as the 75 s set was checked.
+# quality, not an upload cap. Against the 4K master, the 220 s set scored VMAF
+# 94.7 (AV1), 95.4 (HEVC) and 96.8 (720p, at its own size), the worst frames
+# the grainiest. Check a new master the same way before publishing.
 # usage: scripts/encode [master.mov] [song.wav] [out-dir]
 set -eu
 cd "$(dirname "$0")/.."
