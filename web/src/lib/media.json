@@ -1,4 +1,10 @@
 {
 	"origin": "https://media.oddurs.com",
-	"files": {}
+	"files": {
+		"loop-av1.mp4": "video/loop-av1.4a4d9241a2ad.mp4",
+		"loop-hevc.mp4": "video/loop-hevc.8ba0e2393442.mp4",
+		"loop-720.mp4": "video/loop-720.169f7b962354.mp4",
+		"poster.jpg": "video/poster.23507c5cb6ea.jpg",
+		"hero.jpg": "video/hero.d8893ac7c7bb.jpg"
+	}
 }
