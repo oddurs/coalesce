@@ -42,7 +42,18 @@
 	let idle = $state(false);
 	let fullscreen = $state(false);
 	let progress = $state(0);
+	let duration = $state(0);
+	// How far the browser has the film downloaded ahead of the playhead.
+	let buffered = $state(0);
 	let timer: ReturnType<typeof setTimeout> | undefined;
+
+	// Scrubbing: a press on the track seeks there at once, a drag follows the
+	// pointer with playback held, and the release lands exactly and resumes.
+	let track: HTMLElement;
+	let scrubbing = $state(false);
+	let resumeAfterScrub = false;
+	// Where the mouse hovers over the track, for the time it would jump to.
+	let hoverAt = $state<number | null>(null);
 
 	// The film carries its score. It plays muted until asked: browsers only
 	// start sound from a gesture, and nobody wants a page that shouts.
@@ -99,7 +110,16 @@
 		const onFullscreen = () => (fullscreen = document.fullscreenElement !== null);
 		document.addEventListener('fullscreenchange', onFullscreen);
 		let frame = requestAnimationFrame(function tick() {
-			if (video.duration) progress = video.currentTime / video.duration;
+			if (video.duration) {
+				duration = video.duration;
+				if (!scrubbing) progress = video.currentTime / video.duration;
+				const now = video.currentTime;
+				for (let i = 0; i < video.buffered.length; i++) {
+					if (video.buffered.start(i) <= now + 0.5 && now <= video.buffered.end(i)) {
+						buffered = video.buffered.end(i) / video.duration;
+					}
+				}
+			}
 			frame = requestAnimationFrame(tick);
 		});
 		return () => {
@@ -164,20 +184,58 @@
 		}
 	}
 
-	function seek(event: MouseEvent) {
-		const track = event.currentTarget as HTMLElement;
+	/** Seconds as m:ss, the way a player shows them. */
+	function clock(seconds: number) {
+		const whole = Math.max(0, Math.round(seconds));
+		return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+	}
+
+	/** Where a pointer sits along the track, 0 to 1. */
+	function along(event: PointerEvent) {
 		const box = track.getBoundingClientRect();
-		const at = Math.min(Math.max((event.clientX - box.left) / box.width, 0), 1);
-		if (video.duration) video.currentTime = at * video.duration;
+		return Math.min(Math.max((event.clientX - box.left) / box.width, 0), 1);
+	}
+
+	function seekTo(at: number, exact: boolean) {
+		progress = at;
+		const t = at * video.duration;
+		// While dragging, jump to the nearest keyframe where the browser can,
+		// so the picture keeps up with the pointer; land exactly on release.
+		if (!exact && video.fastSeek) video.fastSeek(t);
+		else video.currentTime = t;
+	}
+
+	function scrubStart(event: PointerEvent) {
+		if (!video.duration || event.button > 0) return;
+		event.preventDefault();
+		track.setPointerCapture(event.pointerId);
+		scrubbing = true;
+		resumeAfterScrub = !video.paused;
+		video.pause();
+		seekTo(along(event), false);
 		wake();
 	}
 
-	// Arrow keys on the track step through the loop, five seconds at a time.
-	function step(event: KeyboardEvent) {
-		const by = event.key === 'ArrowRight' ? 5 : event.key === 'ArrowLeft' ? -5 : 0;
-		if (!by || !video.duration) return;
-		event.preventDefault();
-		event.stopPropagation();
+	function scrubMove(event: PointerEvent) {
+		if (scrubbing) {
+			seekTo(along(event), false);
+			wake();
+		} else if (event.pointerType === 'mouse') {
+			hoverAt = along(event);
+		}
+	}
+
+	function scrubEnd(event: PointerEvent) {
+		if (!scrubbing) return;
+		scrubbing = false;
+		seekTo(along(event), true);
+		if (resumeAfterScrub) play();
+		wake();
+	}
+
+	/** Step through the loop, wrapping at either end. */
+	function skip(by: number) {
+		if (!video.duration) return;
 		video.currentTime = (video.currentTime + by + video.duration) % video.duration;
 		wake();
 	}
@@ -264,9 +322,14 @@
 	}
 
 	function key(event: KeyboardEvent) {
+		// The volume slider takes its own arrow keys.
+		const onSlider = (event.target as HTMLElement).matches?.('input[type="range"]');
 		if (event.key === ' ' || event.key === 'k') {
 			event.preventDefault();
 			toggle();
+		} else if ((event.key === 'ArrowRight' || event.key === 'ArrowLeft') && !onSlider) {
+			event.preventDefault();
+			skip(event.key === 'ArrowRight' ? 5 : -5);
 		} else if (event.key === 'f') {
 			toggleFullscreen();
 		} else if (event.key === 'm') {
@@ -347,47 +410,72 @@
 		Turn your phone sideways
 	</p>
 
-	<div class="controls" class:shown>
-		<button onclick={toggle} aria-label={paused ? 'Play' : 'Pause'}>
+	<div class="controls" class:shown class:scrubbing>
+		<button class="play" onclick={toggle} aria-label={paused ? 'Play' : 'Pause'}>
 			{#if paused}
-				<svg viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" /></svg>
+				<svg viewBox="0 0 24 24"
+					><path
+						d="M7.5 5.2v13.6c0 .9 1 1.4 1.7.9l10.3-6.8c.7-.4.7-1.4 0-1.8L9.2 4.3c-.7-.5-1.7 0-1.7.9z"
+					/></svg
+				>
 			{:else}
 				<svg viewBox="0 0 24 24"
-					><rect x="7" y="5.5" width="3.4" height="13" rx="1" /><rect
-						x="13.6"
-						y="5.5"
-						width="3.4"
-						height="13"
-						rx="1"
+					><rect x="6" y="4.5" width="4.2" height="15" rx="1.3" /><rect
+						x="13.8"
+						y="4.5"
+						width="4.2"
+						height="15"
+						rx="1.3"
 					/></svg
 				>
 			{/if}
 		</button>
+		<span class="time">{clock(progress * duration)}</span>
 		<div
 			class="track"
-			onclick={seek}
-			onkeydown={step}
+			bind:this={track}
+			onpointerdown={scrubStart}
+			onpointermove={scrubMove}
+			onpointerup={scrubEnd}
+			onpointercancel={scrubEnd}
+			onpointerleave={() => (hoverAt = null)}
 			role="slider"
 			tabindex="0"
-			aria-label="Position in the loop"
+			aria-label="Position"
 			aria-valuemin={0}
-			aria-valuemax={100}
-			aria-valuenow={Math.round(progress * 100)}
+			aria-valuemax={Math.round(duration)}
+			aria-valuenow={Math.round(progress * duration)}
+			aria-valuetext="{clock(progress * duration)} of {clock(duration)}"
 		>
-			<div class="fill" style:transform="scaleX({progress})"></div>
+			<div class="rail">
+				<div class="buffered" style:transform="scaleX({buffered})"></div>
+				<div class="fill" style:transform="scaleX({progress})"></div>
+			</div>
+			<div class="knob" style:left="{progress * 100}%"></div>
+			{#if scrubbing || hoverAt !== null}
+				<div class="tip" style:--at={scrubbing ? progress : hoverAt}>
+					{clock((scrubbing ? progress : (hoverAt ?? 0)) * duration)}
+				</div>
+			{/if}
 		</div>
+		<span class="time remaining">&minus;{clock(duration - progress * duration)}</span>
 		<div class="volume" class:on={sound} class:fixed={fixedVolume}>
 			<button
 				onclick={toggleSound}
 				aria-label={sound ? 'Mute' : 'Sound on'}
 				aria-pressed={sound}
 			>
-				<svg viewBox="0 0 24 24" class="stroke">
-					<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" />
+				<svg viewBox="0 0 24 24">
+					<path
+						d="M3.5 9.3c0-.6.4-1 1-1h3l4.3-3.6c.6-.5 1.5-.1 1.5.7v13.2c0 .8-.9 1.2-1.5.7L7.5 15.7h-3c-.6 0-1-.4-1-1z"
+					/>
 					{#if sound}
-						<path d="M15.5 9.2a4 4 0 0 1 0 5.6M18.2 6.6a7.6 7.6 0 0 1 0 10.8" />
+						<path
+							class="wave"
+							d="M16 9.2a4.2 4.2 0 0 1 0 5.6M18.6 6.6a8 8 0 0 1 0 10.8"
+						/>
 					{:else}
-						<path d="M16 9.8l4.4 4.4M20.4 9.8L16 14.2" />
+						<path class="wave" d="M16.3 9.8l4.4 4.4M20.7 9.8l-4.4 4.4" />
 					{/if}
 				</svg>
 			</button>
@@ -406,15 +494,13 @@
 			onclick={toggleFullscreen}
 			aria-label={fullscreen ? 'Exit full screen' : 'Full screen'}
 		>
-			{#if fullscreen}
-				<svg viewBox="0 0 24 24" class="stroke"
-					><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg
-				>
-			{:else}
-				<svg viewBox="0 0 24 24" class="stroke"
-					><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg
-				>
-			{/if}
+			<svg viewBox="0 0 24 24" class="stroke">
+				{#if fullscreen}
+					<path d="M9.5 4.5v5h-5M14.5 4.5v5h5M9.5 19.5v-5h-5M14.5 19.5v-5h5" />
+				{:else}
+					<path d="M4.5 9.5v-5h5M19.5 9.5v-5h-5M4.5 14.5v5h5M19.5 14.5v5h-5" />
+				{/if}
+			</svg>
 		</button>
 	</div>
 </main>
@@ -519,30 +605,45 @@
 		border-radius: 2px;
 	}
 
+	/* The player, after Apple's: a floating glass bar, its buttons and the
+	   scrubber sized for a finger on touch screens and for a cursor elsewhere. */
 	.controls {
 		position: absolute;
 		left: 50%;
-		bottom: max(1.5rem, env(safe-area-inset-bottom));
+		bottom: max(1.25rem, env(safe-area-inset-bottom));
 		transform: translate(-50%, 0.5rem);
 		width: min(
-			28rem,
+			40rem,
 			calc(100% - 2rem - env(safe-area-inset-left) - env(safe-area-inset-right))
 		);
 		box-sizing: border-box;
 		display: flex;
 		align-items: center;
-		gap: 0.75rem;
-		padding: 0.4rem 0.55rem;
-		border-radius: 999px;
-		background: rgba(28, 28, 30, 0.45);
-		backdrop-filter: blur(24px) saturate(160%);
-		-webkit-backdrop-filter: blur(24px) saturate(160%);
-		border: 0.5px solid rgba(255, 255, 255, 0.12);
+		gap: 0.35rem;
+		padding: 0.3rem 0.5rem;
+		border-radius: 1.25rem;
+		background: rgba(30, 30, 32, 0.5);
+		backdrop-filter: blur(30px) saturate(180%);
+		-webkit-backdrop-filter: blur(30px) saturate(180%);
+		box-shadow:
+			inset 0 0 0 0.5px rgba(255, 255, 255, 0.14),
+			0 10px 30px rgba(0, 0, 0, 0.35);
+		font:
+			500 0.75rem/1 -apple-system,
+			BlinkMacSystemFont,
+			'SF Pro Text',
+			system-ui,
+			sans-serif;
+		font-variant-numeric: tabular-nums;
+		letter-spacing: 0.01em;
+		color: rgba(255, 255, 255, 0.72);
 		opacity: 0;
 		pointer-events: none;
 		transition:
-			opacity 0.35s ease,
-			transform 0.35s ease;
+			opacity 0.3s ease,
+			transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+		user-select: none;
+		-webkit-user-select: none;
 	}
 	.controls.shown {
 		opacity: 1;
@@ -553,35 +654,129 @@
 		flex: none;
 		display: grid;
 		place-items: center;
-		width: 2.25rem;
-		height: 2.25rem;
+		width: 2.5rem;
+		height: 2.5rem;
 		padding: 0;
 		border: 0;
 		border-radius: 50%;
 		background: transparent;
 		color: #fff;
 		cursor: pointer;
+		-webkit-tap-highlight-color: transparent;
+		transition:
+			background 0.15s ease,
+			transform 0.12s ease;
 	}
 	button:hover {
-		background: rgba(255, 255, 255, 0.1);
+		background: rgba(255, 255, 255, 0.12);
+	}
+	button:active {
+		transform: scale(0.9);
 	}
 	button:focus-visible,
 	.track:focus-visible {
-		outline: 2px solid rgba(255, 255, 255, 0.8);
-		outline-offset: 2px;
+		outline: 2px solid rgba(255, 255, 255, 0.85);
+		outline-offset: 1px;
 	}
 	svg {
-		width: 1.25rem;
-		height: 1.25rem;
+		width: 1.3rem;
+		height: 1.3rem;
 		fill: currentColor;
 	}
+	.play svg {
+		width: 1.45rem;
+		height: 1.45rem;
+	}
+	svg .wave,
 	svg.stroke {
 		fill: none;
 		stroke: currentColor;
-		stroke-width: 2;
+		stroke-width: 1.8;
 		stroke-linecap: round;
 		stroke-linejoin: round;
 	}
+	.time {
+		flex: none;
+		min-width: 2.4rem;
+		text-align: center;
+	}
+
+	/* The scrubber: a tall hit area round a hairline that thickens under the
+	   pointer, a knob that appears when reached for, and the time it would
+	   jump to floating above. */
+	.track {
+		flex: 1;
+		position: relative;
+		align-self: stretch;
+		min-width: 3rem;
+		margin: 0 0.35rem;
+		cursor: pointer;
+		touch-action: none;
+		-webkit-tap-highlight-color: transparent;
+	}
+	.rail {
+		position: absolute;
+		left: 0;
+		right: 0;
+		top: 50%;
+		height: 4px;
+		transform: translateY(-50%);
+		border-radius: 999px;
+		overflow: hidden;
+		background: rgba(255, 255, 255, 0.22);
+		transition: height 0.15s ease;
+	}
+	.track:hover .rail,
+	.scrubbing .rail {
+		height: 6px;
+	}
+	.buffered,
+	.fill {
+		position: absolute;
+		inset: 0;
+		transform-origin: left;
+	}
+	.buffered {
+		background: rgba(255, 255, 255, 0.2);
+	}
+	.fill {
+		background: #fff;
+	}
+	.knob {
+		position: absolute;
+		top: 50%;
+		width: 14px;
+		height: 14px;
+		margin: -7px 0 0 -7px;
+		border-radius: 50%;
+		background: #fff;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+		transform: scale(0);
+		transition: transform 0.15s ease;
+		pointer-events: none;
+	}
+	.track:hover .knob,
+	.scrubbing .knob {
+		transform: scale(1);
+	}
+	.scrubbing .knob {
+		transform: scale(1.25);
+	}
+	.tip {
+		position: absolute;
+		bottom: calc(50% + 14px);
+		left: clamp(1.4rem, calc(var(--at) * 100%), calc(100% - 1.4rem));
+		transform: translateX(-50%);
+		padding: 0.3rem 0.45rem;
+		border-radius: 0.45rem;
+		background: rgba(30, 30, 32, 0.8);
+		backdrop-filter: blur(20px);
+		-webkit-backdrop-filter: blur(20px);
+		color: #fff;
+		white-space: nowrap;
+		pointer-events: none;
+	}
+
 	/* Volume: the slider slides out beside the speaker on hover or focus, and
 	   stays out on touch screens, where there is no hover. */
 	.volume {
@@ -602,14 +797,7 @@
 	.volume:focus-within input {
 		width: 4.5rem;
 		opacity: 1;
-		margin-right: 0.35rem;
-	}
-	@media (hover: none) {
-		.volume input {
-			width: 4rem;
-			opacity: 1;
-			margin-right: 0.3rem;
-		}
+		margin-right: 0.4rem;
 	}
 	.volume.fixed input {
 		display: none;
@@ -617,74 +805,81 @@
 	input[type='range'] {
 		-webkit-appearance: none;
 		appearance: none;
-		height: 1.75rem;
+		height: 2.5rem;
 		background: transparent;
 		cursor: pointer;
 	}
 	input[type='range']::-webkit-slider-runnable-track {
-		height: 3px;
-		border-radius: 3px;
+		height: 4px;
+		border-radius: 999px;
 		background: linear-gradient(
 			to right,
 			#fff calc(var(--level) * 100%),
-			rgba(255, 255, 255, 0.28) 0
+			rgba(255, 255, 255, 0.22) 0
 		);
 	}
 	input[type='range']::-webkit-slider-thumb {
 		-webkit-appearance: none;
-		width: 12px;
-		height: 12px;
-		margin-top: -4.5px;
+		width: 14px;
+		height: 14px;
+		margin-top: -5px;
 		border-radius: 50%;
 		background: #fff;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 	}
 	input[type='range']::-moz-range-track {
-		height: 3px;
-		border-radius: 3px;
-		background: rgba(255, 255, 255, 0.28);
+		height: 4px;
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.22);
 	}
 	input[type='range']::-moz-range-progress {
-		height: 3px;
-		border-radius: 3px;
+		height: 4px;
+		border-radius: 999px;
 		background: #fff;
 	}
 	input[type='range']::-moz-range-thumb {
-		width: 12px;
-		height: 12px;
+		width: 14px;
+		height: 14px;
 		border: 0;
 		border-radius: 50%;
 		background: #fff;
 	}
 	input[type='range']:focus-visible {
-		outline: 2px solid rgba(255, 255, 255, 0.8);
+		outline: 2px solid rgba(255, 255, 255, 0.85);
 		outline-offset: 2px;
 		border-radius: 4px;
 	}
 
-	/* A tall hit area around a hairline, so it is easy to tap. */
-	.track {
-		flex: 1;
-		position: relative;
-		height: 1.75rem;
-		cursor: pointer;
+	/* Touch screens: 44 px targets, the knob always there to grab, the volume
+	   slider out, and no double-tap zoom. */
+	@media (hover: none) {
+		main {
+			touch-action: manipulation;
+		}
+		button {
+			width: 2.75rem;
+			height: 2.75rem;
+		}
+		button:hover {
+			background: transparent;
+		}
+		.knob {
+			transform: scale(0.85);
+		}
+		.volume input {
+			width: 4rem;
+			opacity: 1;
+			margin-right: 0.3rem;
+		}
 	}
-	.track::before,
-	.fill {
-		content: '';
-		position: absolute;
-		left: 0;
-		right: 0;
-		top: 50%;
-		height: 3px;
-		margin-top: -1.5px;
-		border-radius: 3px;
-	}
-	.track::before {
-		background: rgba(255, 255, 255, 0.28);
-	}
-	.fill {
-		background: #fff;
-		transform-origin: left;
+	/* Narrow screens keep the bar calm: one time, counting down. */
+	@media (max-width: 560px) {
+		.time:not(.remaining) {
+			display: none;
+		}
+		.volume input {
+			display: none;
+		}
 	}
 
 	/* Upright phones: the film is 1.90:1, so show the whole frame and ask for
