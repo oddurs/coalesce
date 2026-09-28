@@ -22,8 +22,9 @@ case "${1:-}" in
     exec $low target/release/render $gentle frames --width 960 --height 506 --spp 2 --steps 500 --no-exr --out out/loop-lo "$@" ;;
   *)
     # A 4K frame is 44 MB as 16-bit PNG, so frames go a chunk at a time into
-    # ProRes 422 HQ and are deleted: the disk holds one chunk of frames and a
-    # master of about 20 GB. Resumable: finished chunks are kept and skipped.
+    # ProRes 422, 10-bit and far above what the web and YouTube encodes need,
+    # and are deleted: the disk holds one chunk of frames and a master of about
+    # 14 GB. Resumable: finished chunks are kept and skipped.
     # 5280 frames is LOOP_FRAMES in render/src/scene.rs.
     total=5280
     chunk=240
@@ -35,7 +36,7 @@ case "${1:-}" in
       if [ ! -f "$mov" ]; then
         $low target/release/render $gentle frames --start "$a" --end "$b" --no-exr --out out/frames "$@"
         $low ffmpeg -y -loglevel error -framerate 24 -start_number "$a" -i out/frames/png/frame_%04d.png \
-          -frames:v "$chunk" -c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le -vendor apl0 \
+          -frames:v "$chunk" -c:v prores_ks -profile:v 2 -pix_fmt yuv422p10le -vendor apl0 \
           -color_primaries bt709 -color_trc iec61966-2-1 -colorspace bt709 -f mov "$mov.part"
         mv "$mov.part" "$mov"
         find out/frames/png -name 'frame_*.png' -delete
@@ -44,5 +45,12 @@ case "${1:-}" in
     done
     ls out/chunks/chunk_*.mov | sed "s|^out/chunks/|file '|; s|\$|'|" > out/chunks/list.txt
     $low ffmpeg -y -loglevel error -f concat -safe 0 -i out/chunks/list.txt -c copy out/master.mov
+    # The chunks go only once the master holds every frame.
+    frames=$(ffprobe -v error -count_packets -show_entries stream=nb_read_packets -of csv=p=0 out/master.mov)
+    if [ "$frames" -ne "$total" ]; then
+      echo "render: master has $frames frames, expected $total; chunks kept" >&2
+      exit 1
+    fi
+    rm -r out/chunks
     ls -la out/master.mov ;;
 esac
