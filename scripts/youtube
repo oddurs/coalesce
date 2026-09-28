@@ -16,7 +16,7 @@ length=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$master")
 end=$(awk -v l="$length" 'BEGIN { print l - 0.5 }')
 mkdir -p "$(dirname "$out")"
 $low ffmpeg -y -loglevel error -stats -i "$master" -i "$song" -map 0:v -map 1:a \
-  -vf "fade=t=in:st=0:d=0.5,fade=t=out:st=$end:d=0.5,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,format=yuv420p" \
+  -vf "fade=t=in:st=0:d=0.5,fade=t=out:st=$end:d=0.5,scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd+full_chroma_int,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709,format=yuv420p" \
   -af apad -shortest \
   -c:v libx264 -preset slow -crf 14 -tune grain -profile:v high -g 12 -bf 2 \
   -color_primaries bt709 -color_trc bt709 -colorspace bt709 \

@@ -4,7 +4,8 @@
 # they are centred. So: clear the subsonics and trim the deep sub, fold the
 # lows to mono, open the presence and air a little, glue the loudest passages
 # with a slow compressor that leaves the song's swells and build alone, round
-# the peaks with a touch of tape-like saturation, and
+# the peaks with a touch of tape-like saturation, fade the last seconds out
+# on a slow S-curve (the track's own ending drops 30 dB in a second), and
 # level it to -14 LUFS with true peaks under -1 dBTP. The saturation and the
 # limiter run at 192 kHz so neither aliases.
 # usage: scripts/master <song.wav> [out.wav]
@@ -28,9 +29,12 @@ loudness() {
 }
 set -- $(loudness "$in" "$chain")
 gain=$(awk -v t="$target" -v i="$1" 'BEGIN { print t - i }')
+length=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$in")
+fade=$(awk -v l="$length" 'BEGIN { print l - 7 }')
 mkdir -p "$(dirname "$out")"
 $low ffmpeg -y -loglevel error -i "$in" -filter_complex "[0]$chain,volume=${gain}dB,\
-alimiter=limit=0.87:attack=3:release=80:level=0,aresample=48000:filter_size=64:phase_shift=10:cutoff=0.97" \
+alimiter=limit=0.87:attack=3:release=80:level=0,aresample=48000:filter_size=64:phase_shift=10:cutoff=0.97,\
+afade=t=out:st=$fade:d=7:curve=hsin" \
   -c:a pcm_s24le "$out"
 set -- $(loudness "$out" anull)
 echo "$out: $1 LUFS, true peak $2 dBTP"

@@ -407,7 +407,7 @@ pub fn exposure(tau: f32) -> f32 {
 /// and nebula dim and grey, as if the merger drew the light out of them; with
 /// the flash they flood back past their rest and settle.
 pub fn sky_life(tau: f32) -> (f32, f32) {
-    const DRAINED: (f32, f32) = (0.45, 0.4);
+    const DRAINED: (f32, f32) = (0.25, 0.3);
     let s = tau - T_COALESCE;
     if s < 0.0 {
         let k = smoothstep(-26.0, -0.3, s);
