@@ -26,6 +26,7 @@ struct Params {
     gw: vec4<f32>,          // wave speed, table t0, table dt, table length
     gw2: vec4<f32>,         // lens strength, disk ripple strength, flash, stream gain
     spiral: vec4<f32>,      // spiral phase, strength, lump phase, lump strength
+    mood: vec4<f32>,        // sky brightness, sky saturation, electric crackle, unused
     bodies: array<Body, 2>,
 };
 
@@ -193,7 +194,10 @@ fn disk_shape(r: f32, phi: f32, inner: f32, outer: f32, life: f32, seed: f32) ->
     // Thicker in some places than others, so the band's edges never run parallel.
     let swell = fbm(vec3<f32>(cos(phi) * 1.2, sin(phi) * 1.2, 0.05 * P.misc.x + seed + 9.0), 2);
     let flare = (1.0 + life * 1.6 * span * span) * (1.0 + life * 0.9 * (swell - 0.5));
-    let rim = 1.0 + life * 0.45 * (edge - 0.5);
+    // Ragged, and lopsided: one side of the rim reaches further out, slowly
+    // turning, so the outline never settles into a circle.
+    let lopsided = 0.07 * cos(phi - 0.05 * P.misc.x + seed) + 0.03 * cos(3.0 * phi + 0.08 * P.misc.x + seed * 2.0);
+    let rim = 1.0 + life * (0.52 * (edge - 0.5) + lopsided);
     return vec3<f32>(lift, flare, rim);
 }
 
@@ -203,7 +207,7 @@ fn disk_sample(
     x: vec3<f32>, ray_dir: vec3<f32>, center: vec3<f32>, center_vel: vec3<f32>,
     normal: vec3<f32>, tangent: vec3<f32>, mass: f32, rs_grav: f32,
     inner: f32, outer: f32, gain: f32, temp_in: f32, seed: f32, thick: f32, scale: f32, ripple: f32, driven: f32, falloff: f32,
-    footprint: f32, life: f32,
+    footprint: f32, life: f32, electric: f32,
 ) -> DiskSample {
     var out: DiskSample;
     out.emission = vec3<f32>(0.0);
@@ -250,7 +254,7 @@ fn disk_sample(
     var fil_amp = 1.0;
     var fil = 0.0;
     var fil_w = 0.0;
-    for (var o = 0; o < 3; o++) {
+    for (var o = 0; o < 4; o++) {
         let k = 5.0 * pow(3.0, f32(o));
         let lod = 1.0 - smoothstep(0.25, 0.7, footprint * k / lane_world);
         if (lod <= 0.0) { break; }
@@ -297,8 +301,33 @@ fn disk_sample(
     // Extra emissive falloff, separate from the gas: the outskirts burn down to
     // embers and the hot inner edge carries the frame.
     let glow = pow(inner / r, falloff);
-    out.emission = col * brightness * glow * dens * (0.4 + 1.2 * dens) * gain;
-    out.density = dens * min(gain, 1.0);
+    var light = col * brightness * glow * dens * (0.4 + 1.2 * dens) * gain;
+    var absorb = dens * min(gain, 1.0);
+    if (life > 0.0) {
+        // Lanes of cooler dust wound through the remnant's gas: they absorb
+        // more than they shine, so near gas stands against far gas and the
+        // disk reads in depth instead of as a flat glow.
+        let lane = fbm(vec3<f32>(cos(phi_rot) * 3.0, sin(phi_rot) * 3.0, rho * cycles * 1.7 + seed + 5.0 + zn * 0.5), 3);
+        let dust = life * smoothstep(0.45, 0.72, lane);
+        light *= 1.0 - 0.45 * dust;
+        absorb *= 1.0 + 1.2 * dust;
+    }
+    if (electric > 0.0) {
+        // Current in the hottest gas: thin filaments that flicker and shift,
+        // brightest and bluest where the gas comes at the camera. Faded out
+        // where a pixel is wider than the filaments, so it never shimmers.
+        let qe = vec3<f32>(cos(phi_rot) * 6.0, sin(phi_rot) * 6.0, rho * 9.0 + seed + P.misc.x * 2.5);
+        let ridge = 1.0 - abs(2.0 * fbm(qe + vec3<f32>(warp * 2.0, 0.0, 0.0), 3) - 1.0);
+        let lod = 1.0 - smoothstep(0.25, 0.7, footprint * 24.0 / r);
+        // Carved into the glow, not added on top: the hottest gas is near
+        // white, so the current shows as structure, dimmer between filaments.
+        let hot = smoothstep(0.35, 1.6, brightness) * lod * electric;
+        let spark = pow(ridge, 6.0);
+        light = mix(light, light * vec3<f32>(0.85, 0.93, 1.1), min(spark * hot, 1.0))
+            * mix(1.0, 0.65 + 2.0 * spark, hot);
+    }
+    out.emission = light;
+    out.density = absorb;
     return out;
 }
 
@@ -362,7 +391,7 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>, footprint: f32) -> DiskSample {
         let s = disk_sample(
             x, dir, b.pos_rs.xyz, b.vel_mass.xyz, b.normal.xyz, b.tangent.xyz,
             b.vel_mass.w, b.pos_rs.w, b.disk.x, b.disk.y, b.disk.z, b.disk.w,
-            f32(i) * 7.3, 0.04, 1.0, 0.0, 0.0, 0.0, footprint, b.tangent.w,
+            f32(i) * 7.3, 0.04, 1.0, 0.0, 0.0, 0.0, footprint, b.tangent.w, P.mood.z,
         );
         total.emission += s.emission;
         total.density += s.density;
@@ -377,7 +406,7 @@ fn sample_volume(x: vec3<f32>, dir: vec3<f32>, footprint: f32) -> DiskSample {
     let ripple = P.gw2.y * wave.h * length(x.xz);
     let big = disk_sample(
         x, dir, vec3<f32>(0.0), vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0),
-        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.009, 2.5, ripple, 1.0, 1.6, footprint, 0.0,
+        1.0, 2.0, P.big.x, P.big.y, P.big.z, P.big.w, 31.7, 0.009, 2.5, ripple, 1.0, 1.6, footprint, 0.0, 0.0,
     );
     total.emission += big.emission;
     total.density += big.density;
@@ -459,6 +488,46 @@ fn sky(d: vec3<f32>) -> vec3<f32> {
     return col;
 }
 
+// Stars at finite distance, on two shells round the system. The escaped ray is
+// carried straight out to each, so as the camera moves these stars slide
+// against the far sky: parallax. Sized by the pixel's footprint at the shell.
+fn near_stars(x: vec3<f32>, d: vec3<f32>, travel: f32) -> vec3<f32> {
+    var col = vec3<f32>(0.0);
+    for (var i = 0; i < 2; i++) {
+        let radius = select(2500.0, 900.0, i == 0);
+        let b = dot(x, d);
+        let t = -b + sqrt(max(b * b - dot(x, x) + radius * radius, 0.0));
+        let size = max((travel + t) * P.sky.w, 1e-5) / radius;
+        let cells = select(500.0, 260.0, i == 0);
+        col += star_layer(normalize(x + d * t), cells, 0.02, 71u + u32(i) * 13u, size * 1.1) * select(0.8, 1.6, i == 0);
+    }
+    return col * P.sky.x;
+}
+
+// The sky as it arrives at the camera. Where the holes bend light hard it
+// splits a little by colour, as through thick glass, and comes in a shade
+// dimmer: the lens round each shadow. Then the sky's life for the moment.
+fn sky_seen(x: vec3<f32>, d: vec3<f32>, d0: vec3<f32>, travel: f32) -> vec3<f32> {
+    let bend = d - d0;
+    let deflection = length(bend);
+    var c: vec3<f32>;
+    if (deflection > 0.3) {
+        let e = 0.0003 * smoothstep(0.3, 1.5, deflection);
+        let dr = normalize(d - bend * e);
+        let db = normalize(d + bend * e);
+        c = vec3<f32>(
+            (sky(dr) + near_stars(x, dr, travel)).r,
+            (sky(d) + near_stars(x, d, travel)).g,
+            (sky(db) + near_stars(x, db, travel)).b,
+        );
+    } else {
+        c = sky(d) + near_stars(x, d, travel);
+    }
+    c *= 1.0 - 0.15 * smoothstep(0.2, 1.2, deflection);
+    let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return mix(vec3<f32>(luma), c, P.mood.y) * P.mood.x;
+}
+
 // Largest step that will not skip across a disk slab. Inside the slab the
 // step is a fraction of the thickness; outside it is half the distance to it.
 fn disk_step_limit(x: vec3<f32>, center: vec3<f32>, normal: vec3<f32>, inner: f32, outer: f32, gain: f32, thick: f32, scale: f32, life: f32) -> f32 {
@@ -505,7 +574,7 @@ fn trace(origin: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
         }
         let rc = length(x);
         if (rc > ESCAPE_RADIUS && dot(x, v) > 0.0) {
-            return col + transmit * sky(normalize(v));
+            return col + transmit * sky_seen(x, normalize(v), dir, travel);
         }
 
         // Step control: fine near the horizons and inside the disk slab.

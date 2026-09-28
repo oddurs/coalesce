@@ -1,0 +1,16 @@
+#!/bin/sh
+# The whole loop, small and fast, with the song under it: to judge timing,
+# motion and the seam by eye and ear before a full render. Resumable.
+# usage: scripts/preview <song.wav> [start-frame end-frame]
+set -eu
+cd "$(dirname "$0")/.."
+# Utility priority: the machine stays responsive for other work meanwhile.
+if command -v taskpolicy >/dev/null 2>&1; then low="taskpolicy -c utility"; else low="nice -n 10"; fi
+song=${1:?usage: scripts/preview <song.wav> [start-frame end-frame]}
+shift
+scripts/render --lo ${1:+--start "$1"} ${2:+--end "$2"}
+# The song starts at frame 0 and silence fills the rest of the loop.
+$low ffmpeg -y -loglevel error -stats -framerate 24 -i out/loop-lo/png/frame_%04d.png -i "$song" \
+  -af apad -shortest -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p \
+  -c:a aac -b:a 192k -movflags +faststart out/preview.mp4
+ls -la out/preview.mp4

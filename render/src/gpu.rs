@@ -3,6 +3,7 @@
 
 use std::borrow::Cow;
 use std::num::NonZeroU64;
+use std::time::Instant;
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -133,11 +134,19 @@ struct TraceParams {
     gw: [f32; 4],
     gw2: [f32; 4],
     spiral: [f32; 4],
+    mood: [f32; 4],
     bodies: [GpuBody; 2],
 }
 
 const TRACE_STRIDE: u64 = 512;
 const TILE: u32 = 512;
+/// Gentle mode: smaller tiles, grouped into submits of about `GENTLE_SLICE`,
+/// and the GPU left idle for `GENTLE_REST` of the time it worked. The rest is
+/// paid in naps of at least `GENTLE_NAP`: macOS stretches shorter sleeps.
+const GENTLE_TILE: u32 = 256;
+const GENTLE_SLICE: std::time::Duration = std::time::Duration::from_millis(25);
+const GENTLE_REST: f32 = 0.5;
+const GENTLE_NAP: std::time::Duration = std::time::Duration::from_millis(60);
 
 #[derive(Clone, Copy, Debug)]
 pub struct Quality {
@@ -217,6 +226,7 @@ fn trace_params(frame: &Frame, q: &Quality) -> TraceParams {
             if frame.merged { 0.0 } else { 1.0 },
         ],
         spiral: [frame.spiral_phase, 0.45, frame.lump_phase, 0.6],
+        mood: [frame.sky_gain, frame.sky_saturation, frame.electric, 0.0],
         bodies,
     }
 }
@@ -228,6 +238,7 @@ pub struct Tracer {
     gw: wgpu::Buffer,
     params: wgpu::Buffer,
     params_capacity: u64,
+    gentle: bool,
 }
 
 impl Tracer {
@@ -306,7 +317,14 @@ impl Tracer {
             gw,
             params,
             params_capacity,
+            gentle: false,
         }
+    }
+
+    /// Share the machine: work in short slices so the display and other apps
+    /// get the GPU between them, and rest after each. About a third slower.
+    pub fn gentle(&mut self) {
+        self.gentle = true;
     }
 
     /// Render one image. Sample `s` is traced through `frames[s % len]`, so
@@ -318,8 +336,9 @@ impl Tracer {
         }
         let pixels = (q.width * q.height) as u64;
         let accum = storage_buffer(&gpu.device, "accum", pixels * 16);
-        let tiles_x = q.width.div_ceil(TILE);
-        let tiles_y = q.height.div_ceil(TILE);
+        let tile = if self.gentle { GENTLE_TILE } else { TILE };
+        let tiles_x = q.width.div_ceil(tile);
+        let tiles_y = q.height.div_ceil(tile);
         let tiles = (tiles_x * tiles_y) as u64;
         if tiles > self.params_capacity {
             self.params_capacity = tiles;
@@ -357,6 +376,12 @@ impl Tracer {
             ],
         });
 
+        // Flat out, a whole sample goes in one submit. Gently, it goes in
+        // slices sized as they run to take about GENTLE_SLICE each; the size
+        // carries over from sample to sample.
+        let mut per_submit = if self.gentle { 1 } else { tiles };
+        // Rest owed, in seconds; negative when a nap ran long.
+        let mut owed = 0.0f32;
         for sample in 0..q.spp {
             let base = trace_params(&frames[sample as usize % frames.len()], q);
             // One submit per sample keeps each command buffer short.
@@ -364,8 +389,8 @@ impl Tracer {
             for ty in 0..tiles_y {
                 for tx in 0..tiles_x {
                     let mut p = base;
-                    p.res[2] = tx * TILE;
-                    p.res[3] = ty * TILE;
+                    p.res[2] = tx * tile;
+                    p.res[3] = ty * tile;
                     p.misc[1] = sample as f32;
                     let i = ((ty * tiles_x + tx) as u64 * TRACE_STRIDE) as usize;
                     staged[i..i + std::mem::size_of::<TraceParams>()]
@@ -373,17 +398,37 @@ impl Tracer {
                 }
             }
             gpu.queue.write_buffer(&self.params, 0, &staged);
-            let mut enc = gpu.device.create_command_encoder(&Default::default());
-            {
-                let mut pass = enc.begin_compute_pass(&Default::default());
-                pass.set_pipeline(&self.pipeline);
-                for t in 0..tiles {
-                    pass.set_bind_group(0, &bind, &[(t * TRACE_STRIDE) as u32]);
-                    pass.dispatch_workgroups(TILE / 8, TILE / 8, 1);
+            let mut next = 0;
+            while next < tiles {
+                let n = per_submit.min(tiles - next);
+                let started = Instant::now();
+                let mut enc = gpu.device.create_command_encoder(&Default::default());
+                {
+                    let mut pass = enc.begin_compute_pass(&Default::default());
+                    pass.set_pipeline(&self.pipeline);
+                    for t in next..next + n {
+                        pass.set_bind_group(0, &bind, &[(t * TRACE_STRIDE) as u32]);
+                        pass.dispatch_workgroups(tile / 8, tile / 8, 1);
+                    }
+                }
+                gpu.queue.submit(Some(enc.finish()));
+                gpu.wait()?;
+                next += n;
+                if self.gentle {
+                    let took = started.elapsed();
+                    if took < GENTLE_SLICE / 2 {
+                        per_submit *= 2;
+                    } else if took > GENTLE_SLICE * 2 && per_submit > 1 {
+                        per_submit /= 2;
+                    }
+                    owed += took.as_secs_f32() * GENTLE_REST;
+                    if owed >= GENTLE_NAP.as_secs_f32() {
+                        let napped = Instant::now();
+                        std::thread::sleep(std::time::Duration::from_secs_f32(owed));
+                        owed -= napped.elapsed().as_secs_f32();
+                    }
                 }
             }
-            gpu.queue.submit(Some(enc.finish()));
-            gpu.wait()?;
         }
         gpu.read_back(&accum, pixels * 16)
     }

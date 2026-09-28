@@ -10,6 +10,10 @@ use render::scene;
 #[derive(Parser)]
 #[command(name = "render", about = "Binary black hole loop renderer")]
 struct Cli {
+    /// Share the machine while rendering: short GPU slices with rests
+    /// between them. About a third slower.
+    #[arg(long, global = true)]
+    gentle: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -130,6 +134,10 @@ enum Cmd {
         end: u32,
         #[arg(long, default_value = "out/frames")]
         out: PathBuf,
+        /// Graded PNGs only. Previews are never re-graded, and the EXRs are
+        /// most of their size.
+        #[arg(long)]
+        no_exr: bool,
         #[command(flatten)]
         quality: QualityArgs,
         #[command(flatten)]
@@ -157,10 +165,13 @@ struct Session {
 }
 
 impl Session {
-    fn new() -> Result<Self, String> {
+    fn new(gentle: bool) -> Result<Self, String> {
         let gpu = Gpu::new()?;
         eprintln!("gpu: {}", gpu.adapter_name);
-        let tracer = Tracer::new(&gpu);
+        let mut tracer = Tracer::new(&gpu);
+        if gentle {
+            tracer.gentle();
+        }
         let post = Post::new(&gpu);
         Ok(Session { gpu, tracer, post })
     }
@@ -241,7 +252,8 @@ fn stats(hdr: &Hdr) -> String {
 }
 
 fn run() -> Result<(), String> {
-    match Cli::parse().cmd {
+    let cli = Cli::parse();
+    match cli.cmd {
         Cmd::Still {
             t,
             out,
@@ -250,7 +262,7 @@ fn run() -> Result<(), String> {
             look,
         } => {
             let q = quality.quality();
-            let mut s = Session::new()?;
+            let mut s = Session::new(cli.gentle)?;
             let started = Instant::now();
             let hdr = s.trace(t, &q)?;
             eprintln!(
@@ -275,15 +287,18 @@ fn run() -> Result<(), String> {
             start,
             end,
             out,
+            no_exr,
             quality,
             look,
         } => {
             let q = quality.quality();
             let look = look.look();
-            let mut s = Session::new()?;
+            let mut s = Session::new(cli.gentle)?;
             let exr_dir = out.join("exr");
             let png_dir = out.join("png");
-            std::fs::create_dir_all(&exr_dir).map_err(|e| e.to_string())?;
+            if !no_exr {
+                std::fs::create_dir_all(&exr_dir).map_err(|e| e.to_string())?;
+            }
             std::fs::create_dir_all(&png_dir).map_err(|e| e.to_string())?;
             let total = end.saturating_sub(start);
             let started = Instant::now();
@@ -291,13 +306,15 @@ fn run() -> Result<(), String> {
             for n in start..end {
                 let png = png_dir.join(format!("frame_{n:04}.png"));
                 let exr = exr_dir.join(format!("frame_{n:04}.exr"));
-                if png.exists() && exr.exists() {
+                if png.exists() && (no_exr || exr.exists()) {
                     continue;
                 }
                 let t = scene::frame_time(n);
                 let frame_started = Instant::now();
                 let hdr = s.trace(t, &q)?;
-                hdr.write_exr(&exr)?;
+                if !no_exr {
+                    hdr.write_exr(&exr)?;
+                }
                 let graded = s.grade(&hdr, t, n, &look)?;
                 write_png16(&png, q.width, q.height, &graded)?;
                 done += 1;
@@ -318,7 +335,7 @@ fn run() -> Result<(), String> {
             look,
         } => {
             let look = look.look();
-            let s = Session::new()?;
+            let s = Session::new(cli.gentle)?;
             let png_dir = out.join("png");
             std::fs::create_dir_all(&png_dir).map_err(|e| e.to_string())?;
             for n in start..end {

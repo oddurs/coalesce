@@ -1,0 +1,40 @@
+#!/bin/sh
+# Master the song for the film. The track comes dark, band-limited up top,
+# with its deep sub as loud as its bass and its low mids nearly as wide as
+# they are centred. So: clear the subsonics and trim the deep sub, fold the
+# lows to mono, open the presence and air a little, glue the loudest passages
+# with a slow compressor that leaves the song's swells and build alone, round
+# the peaks with a touch of tape-like saturation, fade the last seconds out
+# on a slow S-curve (the track's own ending drops 30 dB in a second), and
+# level it to -14 LUFS with true peaks under -1 dBTP. The saturation and the
+# limiter run at 192 kHz so neither aliases.
+# usage: scripts/master <song.wav> [out.wav]
+set -eu
+cd "$(dirname "$0")/.."
+# Utility priority: the machine stays responsive for other work meanwhile.
+if command -v taskpolicy >/dev/null 2>&1; then low="taskpolicy -c utility"; else low="nice -n 10"; fi
+in=${1:?usage: scripts/master <song.wav> [out.wav]}
+out=${2:-out/song-master.wav}
+target=-14
+chain="highpass=f=20:poles=2,equalizer=f=32:t=q:w=0.9:g=-2,asplit=2[lows][highs];\
+[lows]lowpass=f=120:poles=2,lowpass=f=120:poles=2,pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1[mono];\
+[highs]highpass=f=120:poles=2,highpass=f=120:poles=2[rest];\
+[mono][rest]amix=inputs=2:normalize=0,\
+equalizer=f=3000:t=q:w=1.1:g=1.5,highshelf=f=7000:w=0.6:g=2.5,\
+acompressor=threshold=-10dB:ratio=1.5:attack=40:release=300:knee=6,\
+aresample=192000,volume=2dB,asoftclip=type=tanh,volume=-2dB"
+loudness() {
+  $low ffmpeg -hide_banner -nostats -i "$1" -filter_complex "[0]$2,ebur128=peak=true" -f null - 2>&1 |
+    awk '/Integrated loudness/ { getline; i = $2 } /True peak/ { getline; p = $2 } END { print i, p }'
+}
+set -- $(loudness "$in" "$chain")
+gain=$(awk -v t="$target" -v i="$1" 'BEGIN { print t - i }')
+length=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$in")
+fade=$(awk -v l="$length" 'BEGIN { print l - 7 }')
+mkdir -p "$(dirname "$out")"
+$low ffmpeg -y -loglevel error -i "$in" -filter_complex "[0]$chain,volume=${gain}dB,\
+alimiter=limit=0.87:attack=3:release=80:level=0,aresample=48000:filter_size=64:phase_shift=10:cutoff=0.97,\
+afade=t=out:st=$fade:d=7:curve=hsin" \
+  -c:a pcm_s24le "$out"
+set -- $(loudness "$out" anull)
+echo "$out: $1 LUFS, true peak $2 dBTP"

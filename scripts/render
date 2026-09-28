@@ -1,16 +1,56 @@
 #!/bin/sh
 # Render the loop. `--preview` renders one look-dev still, `--lo` a quick
-# low-resolution pass of the whole loop, otherwise the full 4K loop, resumable.
+# low-resolution pass of the whole loop, otherwise the final: 4K into a ProRes
+# master at out/master.mov. Renders share the machine: gentle GPU slices at
+# utility priority; `--fast` drops the slices for an unattended run.
 set -eu
 cd "$(dirname "$0")/.."
 cargo build --release -q -p render
+gentle=--gentle
+if [ "${1:-}" = --fast ]; then
+  gentle=
+  shift
+fi
+# Utility priority: the machine stays responsive for other work meanwhile.
+if command -v taskpolicy >/dev/null 2>&1; then low="taskpolicy -c utility"; else low="nice -n 10"; fi
 case "${1:-}" in
   --preview)
     shift
-    exec target/release/render still --preview --spp 8 --out out/preview/still.png "$@" ;;
+    exec $low target/release/render $gentle still --preview --spp 8 --out out/preview/still.png "$@" ;;
   --lo)
     shift
-    exec target/release/render frames --width 960 --height 506 --spp 2 --steps 500 --out out/loop-lo "$@" ;;
+    exec $low target/release/render $gentle frames --width 960 --height 506 --spp 2 --steps 500 --no-exr --out out/loop-lo "$@" ;;
   *)
-    exec target/release/render frames --width 4096 --height 2160 --spp 16 --steps 900 --out out/frames "$@" ;;
+    # A 4K frame is 44 MB as 16-bit PNG, so frames go a chunk at a time into
+    # ProRes 422, 10-bit and far above what the web and YouTube encodes need,
+    # and are deleted: the disk holds one chunk of frames and a master of about
+    # 14 GB. Resumable: finished chunks are kept and skipped.
+    # 5280 frames is LOOP_FRAMES in render/src/scene.rs.
+    total=5280
+    chunk=240
+    mkdir -p out/chunks
+    a=0
+    while [ "$a" -lt "$total" ]; do
+      b=$((a + chunk))
+      mov=$(printf "out/chunks/chunk_%04d.mov" "$a")
+      if [ ! -f "$mov" ]; then
+        $low target/release/render $gentle frames --start "$a" --end "$b" --no-exr --out out/frames "$@"
+        $low ffmpeg -y -loglevel error -framerate 24 -start_number "$a" -i out/frames/png/frame_%04d.png \
+          -frames:v "$chunk" -c:v prores_ks -profile:v 2 -pix_fmt yuv422p10le -vendor apl0 \
+          -color_primaries bt709 -color_trc iec61966-2-1 -colorspace bt709 -f mov "$mov.part"
+        mv "$mov.part" "$mov"
+        find out/frames/png -name 'frame_*.png' -delete
+      fi
+      a=$b
+    done
+    ls out/chunks/chunk_*.mov | sed "s|^out/chunks/|file '|; s|\$|'|" > out/chunks/list.txt
+    $low ffmpeg -y -loglevel error -f concat -safe 0 -i out/chunks/list.txt -c copy out/master.mov
+    # The chunks go only once the master holds every frame.
+    frames=$(ffprobe -v error -count_packets -show_entries stream=nb_read_packets -of csv=p=0 out/master.mov)
+    if [ "$frames" -ne "$total" ]; then
+      echo "render: master has $frames frames, expected $total; chunks kept" >&2
+      exit 1
+    fi
+    rm -r out/chunks
+    ls -la out/master.mov ;;
 esac

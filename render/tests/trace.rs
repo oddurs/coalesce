@@ -106,3 +106,29 @@ fn streams_hand_over_at_the_mini_disk_rim() {
         luminance(b)
     );
 }
+
+#[test]
+fn gentle_mode_draws_the_same_image() {
+    // Gentle mode cuts each sample into smaller tiles and short submits so
+    // the machine stays usable. A wrong tile offset would still render, just
+    // not this picture.
+    let gpu = Gpu::new().unwrap();
+    let q = Quality {
+        width: 300,
+        height: 170,
+        spp: 2,
+        max_steps: 300,
+        sky: 1.0,
+        aperture: 1.0,
+        wave_lens: 1.0,
+        wave_ripple: 1.0,
+    };
+    let frames: Vec<_> = scene::shutter_times(172.5, q.spp)
+        .iter()
+        .map(|&s| scene::frame(s))
+        .collect();
+    let fast = Tracer::new(&gpu).render(&gpu, &frames, &q).unwrap();
+    let mut gentle = Tracer::new(&gpu);
+    gentle.gentle();
+    assert!(fast == gentle.render(&gpu, &frames, &q).unwrap());
+}
